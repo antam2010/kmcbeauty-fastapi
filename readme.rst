@@ -64,7 +64,7 @@ DB에 마이그레이션 롤백::
 - Swagger UI: http://localhost:3200/docs
 - ReDoc: http://localhost:3200/redoc
 
-(로컬 uvicorn 기준. Swarm 배포 시 호스트 포트 미공개 — 외부 NGINX가 kmcbeauty_api:3200 라우팅)
+(로컬 uvicorn 기준. Swarm 배포 시 호스트 포트 미공개 — 외부 NGINX가 kmcbeauty_api:8000 라우팅)
 
 
 5. 의존성 목록 저장 (선택)

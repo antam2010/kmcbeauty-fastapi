@@ -29,17 +29,17 @@
 #
 # 네트워킹:
 #   - 어떤 서비스도 호스트 포트를 공개하지 않는다. 외부 NGINX 가 동일한
-#     `shared_network_prod` 오버레이에 붙어 서비스 DNS(kmcbeauty_api:3200)로 라우팅한다.
+#     `shared_network_prod` 오버레이에 붙어 서비스 DNS(kmcbeauty_api:8000)로 라우팅한다.
 #   - Redis/Celery 는 오버레이 내부 전용이다.
 # ==============================================================================
 # (compose spec 기준 `version:` 필드는 obsolete — 최신 docker stack deploy 도 불필요)
 
 services:
   # --- FastAPI application ---------------------------------------------------
-  # Reachable by NGINX at:  kmcbeauty_api:3200  (over shared_network_prod)
+  # Reachable by NGINX at:  kmcbeauty_api:8000  (over shared_network_prod)
   kmcbeauty_api:
     image: ${IMAGE_TAG:-kmcbeauty-api:local}
-    command: uvicorn app.main:app --host 0.0.0.0 --port 3200
+    # command 미지정 → 이미지 CMD(uvicorn :8000) 사용. 포트 정의는 Dockerfile 한 곳으로 일원화.
     env_file:
       # 배포 전용 env. 로컬 `.env` 를 배포에 사용하지 않는다(REQ-INFRA-001).
       - .env.prod
@@ -62,13 +62,13 @@ services:
     # 서비스 레벨 헬스체크(REQ-INFRA-004): 롤링 업데이트가 각 새 레플리카의
     # /health 통과를 확인한 뒤 다음 레플리카로 진행하도록 게이팅한다.
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:3200/health"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
     deploy:
-      replicas: 1
+      replicas: 2
       restart_policy:
         condition: any
         delay: 5s
@@ -147,7 +147,7 @@ services:
     healthcheck:
       disable: true
     deploy:
-      replicas: 1
+      replicas: 2
       restart_policy:
         condition: any
         delay: 5s

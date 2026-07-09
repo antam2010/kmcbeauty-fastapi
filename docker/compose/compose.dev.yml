@@ -1,23 +1,81 @@
 # ==============================================================================
 # 로컬 개발용 Compose (SPEC-INFRA-001, REQ-INFRA-012)
 #
-# 목적: 로컬 개발/테스트에서 Redis(필수)와 MySQL(선택)을 빠르게 띄운다.
-#   docker compose -f docker/compose/compose.dev.yml up -d          # Redis 만
-#   docker compose -f docker/compose/compose.dev.yml --profile mysql up -d   # Redis + MySQL
+# 목적: 로컬 개발 스택 전체를 compose 로 기동한다 (앱 + Redis 필수, MySQL/워커 선택).
+#   docker compose -f docker/compose/compose.dev.yml up -d --build        # api + redis
+#   docker compose -f docker/compose/compose.dev.yml --profile mysql up -d   # + MySQL
+#   docker compose -f docker/compose/compose.dev.yml --profile worker up -d  # + Celery 워커
+#   docker compose -f docker/compose/compose.dev.yml down                 # 종료
+#
+# 핫리로드: 소스를 바인드 마운트하고 uvicorn --reload 로 실행하므로
+#   코드 저장 즉시 반영된다(이미지 재빌드는 requirements.txt 변경 시에만 필요).
 #
 # ⚠️ 개발 전용(DEV ONLY): 이 파일은 운영에 사용하지 않는다.
-#   운영 MySQL 은 컨테이너 외부(관리형/호스트)에 있으며 docker-stack.yml 에 포함하지 않는다.
-#   앱은 로컬 uvicorn(`./scripts/start_local.sh`)으로 실행하고, 이 compose 는 백킹 서비스만 제공한다.
+#   운영 배포는 docker-stack.yml(Swarm) — 시크릿/헬스 게이팅/무중단 롤링 포함.
+#   운영 MySQL 은 컨테이너 외부(관리형/호스트)에 있으며 여기의 mysql 은 순수 로컬 편의용.
 # ==============================================================================
 
+# compose 프로젝트 이름 (Docker Desktop 그룹명·컨테이너 접두사)
+name: kmcbeauty-dev
+
 services:
+  # --- FastAPI 앱 (핫리로드) ---------------------------------------------------
+  api:
+    build:
+      context: ../..
+    # 이미지 CMD 에 --reload 만 추가(내부 포트는 이미지 기본 8000).
+    command: uvicorn app.main:app --host 0.0.0.0 --reload
+    # 바인드 마운트된 소스(호스트 uid 1000 소유)에 logs/ 등을 쓸 수 있도록
+    # 이미지의 appuser 대신 호스트 uid 로 실행한다(개발 전용 관행).
+    user: "1000:1000"
+    ports:
+      - "3200:8000" # 호스트 3200 → 컨테이너 8000. http://localhost:3200/docs
+    env_file:
+      # 로컬 개발 env (.env). 배포용 .env.prod 는 사용하지 않는다.
+      - ../../.env
+    environment:
+      # 컨테이너 안에서는 localhost 가 아닌 compose 서비스 DNS 로 Redis 에 접근한다.
+      # (environment 가 env_file 보다 우선하므로 .env 의 localhost 값을 덮어쓴다)
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      # 소스 바인드 마운트 → uvicorn --reload 핫리로드
+      - ../..:/app
+    extra_hosts:
+      # .env 의 DATABASE_URL 이 호스트의 DB(localhost)를 가리키면
+      # 컨테이너 안에서는 host.docker.internal 로 바꿔야 한다.
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+
+  # --- Celery 워커 (선택) : `--profile worker` 로만 기동 -----------------------
+  worker:
+    build:
+      context: ../..
+    profiles: ["worker"]
+    command: celery -A celery_app worker --loglevel=info
+    # api 와 동일 — 바인드 마운트 쓰기 권한을 위해 호스트 uid 로 실행.
+    user: "1000:1000"
+    env_file:
+      - ../../.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ../..:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # 이미지 내장 HEALTHCHECK(curl /health)는 웹서버 전용 — celery 에는 비활성.
+    healthcheck:
+      disable: true
+    depends_on:
+      - redis
+
   # --- Redis (필수) : 레이트리밋/캐시/Celery 브로커 ---------------------------
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes
-    ports:
-      # 로컬 앱은 REDIS_URL=redis://localhost:6379/0 으로 접근(.env).
-      - "6379:6379"
+    # 호스트 포트 미공개 — api/worker 는 내부 DNS(redis:6379)로 접근하므로 불필요하고,
+    # 다른 프로젝트의 로컬 Redis 와 6379 충돌도 방지한다.
+    # 데이터 확인이 필요하면: docker compose exec redis redis-cli
     volumes:
       - redis_dev_data:/data
 
@@ -27,6 +85,7 @@ services:
     image: mysql:8.0
     profiles: ["mysql"]
     environment:
+      TZ: Asia/Seoul
       MYSQL_ROOT_PASSWORD: devroot
       MYSQL_DATABASE: kmcbeauty
       MYSQL_USER: kmc

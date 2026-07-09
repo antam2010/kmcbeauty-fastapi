@@ -4,7 +4,8 @@
 # Production Dockerfile (Docker Swarm)
 # - Single-stage, production-oriented image for `docker stack deploy`.
 # - App code is COPIED into the image (Swarm deploys images, not bind mounts).
-# - Runs as a non-root user and listens on internal port 3200.
+# - Runs as a non-root user and listens on internal port 8000 (uvicorn default).
+#   호스트/외부 노출 포트는 배포 계층(compose ports, NGINX)에서 매핑한다.
 # ==============================================================================
 FROM python:3.13-slim
 
@@ -15,10 +16,12 @@ WORKDIR /app
 #  - PYTHONUNBUFFERED: 로그를 버퍼링 없이 즉시 stdout 으로 내보낸다(컨테이너 로깅 필수).
 #  - PYTHONDONTWRITEBYTECODE: .pyc 생성 방지(이미지 클린 유지).
 #  - PIP_NO_CACHE_DIR / PIP_DISABLE_PIP_VERSION_CHECK: 빌드 캐시/노이즈 최소화.
+#  - TZ: 컨테이너 기본 타임존을 서비스 기준(Asia/Seoul)으로 고정.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    TZ=Asia/Seoul
 
 # 시스템 패키지 설치
 #  - build-essential / default-libmysqlclient-dev / pkg-config: PyMySQL 는 순수 파이썬이지만
@@ -30,6 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         default-libmysqlclient-dev \
         pkg-config \
         curl \
+        tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # 의존성 먼저 설치(레이어 캐시 최적화: 소스 변경 시에도 의존성 레이어 재사용)
@@ -45,12 +49,12 @@ RUN groupadd --system appgroup \
     && chown -R appuser:appgroup /app
 USER appuser
 
-# 내부 서비스 포트(호스트로 노출하지 않음; 외부 NGINX 가 오버레이 네트워크에서 접근)
-EXPOSE 3200
+# 내부 서비스 포트(uvicorn 기본값 8000; 호스트로 직접 노출하지 않음)
+EXPOSE 8000
 
 # 헬스체크: 앱의 /health 엔드포인트(app/main.py) 확인
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -fsS http://localhost:3200/health || exit 1
+    CMD curl -fsS http://localhost:8000/health || exit 1
 
-# 컨테이너 실행 커맨드(uvicorn, 내부 포트 3200)
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3200"]
+# 컨테이너 실행 커맨드(uvicorn, 포트 미지정 → 기본 8000)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0"]

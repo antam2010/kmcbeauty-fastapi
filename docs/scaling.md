@@ -79,13 +79,13 @@ docker node update --label-add role=data <NODE-1>
 ## 3. NGINX 업스트림 고려사항 (REQ-INFRA-018)
 
 - 외부 NGINX 는 `shared_network_prod` 오버레이에 연결되어 서비스 DNS
-  `kmcbeauty_api:3200` 으로 라우팅한다. **Swarm 내장 로드밸런서(VIP)** 가 오버레이에서
+  `kmcbeauty_api:8000` 으로 라우팅한다. **Swarm 내장 로드밸런서(VIP)** 가 오버레이에서
   두 노드에 분산된 `kmcbeauty_api` 레플리카로 자동 분배하므로, NGINX 는 개별 노드 IP 가
   아니라 서비스 DNS(VIP) 하나만 업스트림으로 두면 된다.
 
   ```nginx
   upstream kmcbeauty_api {
-      server kmcbeauty_api:3200;   # 오버레이 VIP — Swarm 이 레플리카로 분산
+      server kmcbeauty_api:8000;   # 오버레이 VIP — Swarm 이 레플리카로 분산
   }
   ```
 
