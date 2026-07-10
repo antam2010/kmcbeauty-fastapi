@@ -46,6 +46,8 @@ services:
     environment:
       # 시크릿 경로는 스택에서 고정(.env.prod 누락 시에도 항상 동일 경로 보장, REQ-INFRA-002).
       FIREBASE_SERVICE_ACCOUNT_KEY_PATH: /run/secrets/firebase_service_account
+      # 컨테이너 로깅은 stdout 단일화(docker service logs 로 수집) — 파일 로그 비활성.
+      LOG_TO_FILE: "false"
     secrets:
       - firebase_service_account
       # SPEC-INFRA-002 신규 시크릿(REQ-INFRA-107): external 이름은 소문자·버전드,
@@ -129,6 +131,7 @@ services:
     environment:
       # 워커 태스크가 FCM 을 전송하므로 동일 시크릿 경로를 고정한다(REQ-INFRA-002).
       FIREBASE_SERVICE_ACCOUNT_KEY_PATH: /run/secrets/firebase_service_account
+      LOG_TO_FILE: "false"
     secrets:
       - firebase_service_account
       # SPEC-INFRA-002 신규 시크릿(REQ-INFRA-107): external 이름은 소문자·버전드,
@@ -175,6 +178,7 @@ services:
       # beat 는 celery_app 로드 시 app.core.firebase 를 전이 import 하므로
       # 초기화 실패를 막기 위해 동일 시크릿 경로를 제공한다(REQ-INFRA-002).
       FIREBASE_SERVICE_ACCOUNT_KEY_PATH: /run/secrets/firebase_service_account
+      LOG_TO_FILE: "false"
     secrets:
       - firebase_service_account
       # SPEC-INFRA-002 신규 시크릿(REQ-INFRA-107): external 이름은 소문자·버전드,

@@ -24,7 +24,12 @@ services:
     build:
       context: ../..
     # 이미지 CMD 에 --reload 만 추가(내부 포트는 이미지 기본 8000).
-    command: uvicorn app.main:app --host 0.0.0.0 --reload
+    # --reload-dir 로 감시 범위를 소스 디렉토리로 한정한다 — /app 전체를 감시하면
+    # 바인드 마운트(.git/.venv/logs)의 유령 이벤트로 "changes detected" 가 무한 반복됨
+    # (WSL 크로스 마운트에서 watchfiles 폴링 오탐 + 파일 로그 피드백 루프).
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --reload
+      --reload-dir app --reload-dir worker
     # 바인드 마운트된 소스(호스트 uid 1000 소유)에 logs/ 등을 쓸 수 있도록
     # 이미지의 appuser 대신 호스트 uid 로 실행한다(개발 전용 관행).
     user: "1000:1000"
@@ -37,6 +42,8 @@ services:
       # 컨테이너 안에서는 localhost 가 아닌 compose 서비스 DNS 로 Redis 에 접근한다.
       # (environment 가 env_file 보다 우선하므로 .env 의 localhost 값을 덮어쓴다)
       REDIS_URL: redis://redis:6379/0
+      # 컨테이너 로깅은 stdout 단일화 — 파일 로그는 권한·리로더 루프 부작용만 유발.
+      LOG_TO_FILE: "false"
     volumes:
       # 소스 바인드 마운트 → uvicorn --reload 핫리로드
       - ../..:/app

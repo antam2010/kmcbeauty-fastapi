@@ -5,11 +5,13 @@ from pathlib import Path
 import sqlparse
 
 
-def setup_logging(app_env: str) -> None:
+def setup_logging(app_env: str, *, log_to_file: bool = True) -> None:
     """로깅 설정 함수.
 
     Args:
         app_env (str): 실행 환경 (local, debug, production)
+        log_to_file (bool): 파일 로그(logs/*.log) 기록 여부.
+            컨테이너에서는 False 로 두고 stdout 만 사용한다(docker logs 수집).
 
     """
     # 1) 기본 로깅 레벨 및 파일명 설정
@@ -32,17 +34,17 @@ def setup_logging(app_env: str) -> None:
     else:
         msg = "Invalid app_env. Choose from: local, debug, stage, production."
         raise ValueError(msg)
-    # 2) 로그 디렉토리 생성
-    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    # 2) 핸들러 구성 — 콘솔(stdout)은 항상, 파일은 log_to_file 일 때만
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_to_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        handlers.insert(0, logging.FileHandler(log_file, encoding="utf-8"))
 
-    # 3) 기본 로깅 설정 (파일 + 콘솔)
+    # 3) 기본 로깅 설정
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
+        handlers=handlers,
     )
 
     # 4) SQLFormatterHandler 정의 (SQL 문장 예쁘게 출력)

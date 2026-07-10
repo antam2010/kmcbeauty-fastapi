@@ -29,8 +29,8 @@ from app.exceptions import CustomException
 
 # 기타
 
-# 로그 설정
-setup_logging(app_env=settings.APP_ENV)
+# 로그 설정 (컨테이너에서는 LOG_TO_FILE=false 로 stdout 만 사용)
+setup_logging(app_env=settings.APP_ENV, log_to_file=settings.LOG_TO_FILE)
 
 # Sentry 설정
 # SENTRY_DSN 이 비어 있어도 init_sentry 를 무조건 호출한다(현행 동작 보존).

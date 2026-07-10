@@ -40,6 +40,9 @@ class Settings(BaseSettings):
 
     # --- 런타임 환경 ---
     APP_ENV: str = "local"
+    # 파일 로그(logs/*.log) 기록 여부. 컨테이너에서는 false 로 두고 stdout 만 사용한다
+    # (docker logs 로 수집; FileHandler 는 바인드 마운트 권한·리로더 루프 부작용 유발).
+    LOG_TO_FILE: bool = True
     # SENTRY_DSN 부재 시 빈 문자열 degrade → Sentry 비활성 기동(REQ-INFRA-104).
     SENTRY_DSN: str = ""
 
