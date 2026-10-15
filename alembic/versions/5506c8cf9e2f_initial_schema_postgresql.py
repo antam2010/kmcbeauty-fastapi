@@ -1,8 +1,12 @@
-"""initial schema.
+"""initial schema postgresql.
 
-Revision ID: 06223b763c27
+MySQL 리비전 체인(7개)을 대체하는 PostgreSQL 단일 베이스라인. 현재 모델에서
+autogenerate 했으며, autogenerate 는 downgrade 에서 PostgreSQL ENUM 타입
+(userrole/treatment_status/payment_method)을 삭제하지 않으므로 DROP 을 수동 추가했다.
+
+Revision ID: 5506c8cf9e2f
 Revises:
-Create Date: 2025-05-24 17:03:24.905079
+Create Date: 2026-10-14 18:42:42.098244
 
 """
 
@@ -13,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "06223b763c27"
+revision: str = "5506c8cf9e2f"
 down_revision: str | None = None
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -45,14 +49,12 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
@@ -84,22 +86,84 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["users.id"],
-        ),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"]),
         sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_shop_user_id", "shop", ["user_id"], unique=False)
+    op.create_table(
+        "device_push_tokens",
+        sa.Column("id", sa.Integer(), nullable=False, comment="디바이스 푸시 토큰 ID"),
+        sa.Column("user_id", sa.Integer(), nullable=True, comment="유저 ID"),
+        sa.Column("shop_id", sa.Integer(), nullable=True, comment="샵 ID"),
+        sa.Column(
+            "device_id",
+            sa.String(length=255),
+            nullable=True,
+            comment="디바이스 고유 ID",
+        ),
+        sa.Column("token", sa.Text(), nullable=False, comment="FCM 토큰"),
+        sa.Column(
+            "platform",
+            sa.String(length=10),
+            nullable=False,
+            comment="플랫폼 (iOS/Android 등)",
+        ),
+        sa.Column(
+            "is_active",
+            sa.Boolean(),
+            server_default="1",
+            nullable=False,
+            comment="활성화 여부",
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            comment="생성일시",
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            comment="수정일시",
+        ),
+        sa.ForeignKeyConstraint(["shop_id"], ["shop.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        sa.PrimaryKeyConstraint("id"),
+        comment="디바이스 푸시 토큰 테이블",
+    )
+    op.create_index(
+        op.f("ix_device_push_tokens_device_id"),
+        "device_push_tokens",
+        ["device_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_device_push_tokens_shop_id"),
+        "device_push_tokens",
+        ["shop_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_device_push_tokens_token"),
+        "device_push_tokens",
+        ["token"],
+        unique=True,
+    )
+    op.create_index(
+        op.f("ix_device_push_tokens_user_id"),
+        "device_push_tokens",
+        ["user_id"],
+        unique=False,
     )
     op.create_table(
         "phonebook",
@@ -123,14 +187,12 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
@@ -169,14 +231,12 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
@@ -218,14 +278,12 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
@@ -246,7 +304,7 @@ def upgrade() -> None:
         sa.Column(
             "phonebook_id",
             sa.Integer(),
-            nullable=False,
+            nullable=True,
             comment="시술 대상 고객 ID",
         ),
         sa.Column("reserved_at", sa.DateTime(), nullable=False, comment="예약 일시"),
@@ -266,28 +324,85 @@ def upgrade() -> None:
         ),
         sa.Column("finished_at", sa.DateTime(), nullable=True, comment="시술 완료일시"),
         sa.Column(
+            "payment_method",
+            sa.Enum("CARD", "CASH", "UNPAID", name="payment_method"),
+            nullable=False,
+            comment="결제 수단",
+        ),
+        sa.Column(
+            "staff_user_id",
+            sa.Integer(),
+            nullable=True,
+            comment="시술 담당자 유저 ID",
+        ),
+        sa.Column(
+            "created_user_id",
+            sa.Integer(),
+            nullable=True,
+            comment="예약 생성자 유저 ID",
+        ),
+        sa.Column(
+            "customer_name",
+            sa.String(length=100),
+            nullable=True,
+            comment="고객명",
+        ),
+        sa.Column(
+            "customer_phone",
+            sa.String(length=20),
+            nullable=True,
+            comment="고객 전화번호",
+        ),
+        sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
-        sa.ForeignKeyConstraint(
-            ["phonebook_id"],
-            ["phonebook.id"],
-        ),
+        sa.ForeignKeyConstraint(["created_user_id"], ["users.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["phonebook_id"], ["phonebook.id"]),
         sa.ForeignKeyConstraint(["shop_id"], ["shop.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["staff_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
         comment="시술 예약 테이블",
     )
+    op.create_index(
+        "idx_treatment_shop_phone",
+        "treatment",
+        ["shop_id", "customer_phone"],
+        unique=False,
+    )
+    op.create_index(
+        "idx_treatment_shop_reserved",
+        "treatment",
+        ["shop_id", "reserved_at"],
+        unique=False,
+    )
+    op.create_index(
+        "idx_treatment_shop_status",
+        "treatment",
+        ["shop_id", "status", "reserved_at"],
+        unique=False,
+    )
     op.create_index(op.f("ix_treatment_id"), "treatment", ["id"], unique=False)
+    op.create_index(
+        op.f("ix_treatment_phonebook_id"),
+        "treatment",
+        ["phonebook_id"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_treatment_shop_id"),
+        "treatment",
+        ["shop_id"],
+        unique=False,
+    )
     op.create_table(
         "treatment_menu_detail",
         sa.Column("id", sa.Integer(), nullable=False, comment="시술 상세 ID"),
@@ -314,14 +429,12 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
@@ -369,14 +482,12 @@ def upgrade() -> None:
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="생성일시",
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
             nullable=False,
             comment="수정일시",
         ),
@@ -395,12 +506,19 @@ def upgrade() -> None:
         ["id"],
         unique=False,
     )
+    op.create_index(
+        "ix_treatment_item_treatment_id",
+        "treatment_item",
+        ["treatment_id"],
+        unique=False,
+    )
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index("ix_treatment_item_treatment_id", table_name="treatment_item")
     op.drop_index(op.f("ix_treatment_item_id"), table_name="treatment_item")
     op.drop_table("treatment_item")
     op.drop_index(
@@ -408,7 +526,12 @@ def downgrade() -> None:
         table_name="treatment_menu_detail",
     )
     op.drop_table("treatment_menu_detail")
+    op.drop_index(op.f("ix_treatment_shop_id"), table_name="treatment")
+    op.drop_index(op.f("ix_treatment_phonebook_id"), table_name="treatment")
     op.drop_index(op.f("ix_treatment_id"), table_name="treatment")
+    op.drop_index("idx_treatment_shop_status", table_name="treatment")
+    op.drop_index("idx_treatment_shop_reserved", table_name="treatment")
+    op.drop_index("idx_treatment_shop_phone", table_name="treatment")
     op.drop_table("treatment")
     op.drop_index(op.f("ix_treatment_menu_id"), table_name="treatment_menu")
     op.drop_table("treatment_menu")
@@ -420,7 +543,27 @@ def downgrade() -> None:
     op.drop_index("idx_shop_deleted_name", table_name="phonebook")
     op.drop_index("idx_shop_deleted_group", table_name="phonebook")
     op.drop_table("phonebook")
+    op.drop_index(
+        op.f("ix_device_push_tokens_user_id"),
+        table_name="device_push_tokens",
+    )
+    op.drop_index(op.f("ix_device_push_tokens_token"), table_name="device_push_tokens")
+    op.drop_index(
+        op.f("ix_device_push_tokens_shop_id"),
+        table_name="device_push_tokens",
+    )
+    op.drop_index(
+        op.f("ix_device_push_tokens_device_id"),
+        table_name="device_push_tokens",
+    )
+    op.drop_table("device_push_tokens")
+    op.drop_index("ix_shop_user_id", table_name="shop")
     op.drop_table("shop")
     op.drop_index(op.f("ix_users_id"), table_name="users")
     op.drop_table("users")
     # ### end Alembic commands ###
+    # autogenerate 는 PostgreSQL ENUM 타입을 삭제하지 않는다. 남겨두면 이후
+    # upgrade 의 CREATE TYPE 이 "already exists" 로 실패하므로 테이블 삭제 뒤 정리한다.
+    sa.Enum(name="payment_method").drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name="treatment_status").drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name="userrole").drop(op.get_bind(), checkfirst=True)
