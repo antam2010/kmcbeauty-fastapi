@@ -24,13 +24,13 @@
 #   1) 매니저 노드에서 배포용 이미지로 일회성 Swarm 서비스(권장):
 #        IMAGE_TAG=ghcr.io/antam2010/kmcbeauty-api:<sha> ./scripts/deploy_migrate.sh
 #   2) 앱 코드가 배치된 호스트에서 직접 실행(로컬 단일 노드):
-#        DATABASE_URL=mysql+pymysql://... ./scripts/deploy_migrate.sh --local
+#        DATABASE_URL=postgresql+psycopg://... ./scripts/deploy_migrate.sh --local
 #      (Docker secret 전환 후 .env.prod 에 DATABASE_URL 이 없으므로 운영자가 직접 export 한다.)
 #
 # 전제:
 #   - 컨테이너 경로: 필수 Docker secret(kmc_database_url_v1/kmc_secret_key_v1/kmc_fernet_key_v1)이
 #     사전 등록되어 있고, 오버레이 네트워크 `shared_network_prod` 가 존재한다.
-#   - MySQL 은 컨테이너 외부(관리형/호스트)에 있으며 매니저 노드에서 접근 가능하다.
+#   - PostgreSQL 은 컨테이너 외부(관리형/호스트)에 있으며 매니저 노드에서 접근 가능하다.
 # ==============================================================================
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -42,7 +42,7 @@ MODE="${1:-container}"
 # DATABASE_URL 이 없으므로 운영자가 환경변수로 반드시 제공해야 한다(계약 위반 위험 1).
 # ---------------------------------------------------------------------------
 if [ "$MODE" = "--local" ]; then
-  : "${DATABASE_URL:?DATABASE_URL 환경변수를 설정하세요 (Docker secret 전환 후 .env.prod 에 없음). 예) export DATABASE_URL=mysql+pymysql://user:pass@host:3306/db?charset=utf8mb4}"
+  : "${DATABASE_URL:?DATABASE_URL 환경변수를 설정하세요 (Docker secret 전환 후 .env.prod 에 없음). 예) export DATABASE_URL=postgresql+psycopg://user:pass@host:5432/db}"
   echo "🗃️  [MIGRATE] 로컬 alembic upgrade head 실행..."
   ENV="${ENV:-prod}" APP_ENV="${APP_ENV:-prod}" alembic upgrade head
   echo "✅ [MIGRATE] 로컬 마이그레이션 완료."

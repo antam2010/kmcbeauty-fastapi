@@ -6,7 +6,7 @@ KMCBeauty API 의 Docker Swarm 무중단 배포 · CI/CD · 시크릿/마이그�
 - 오케스트레이션: Docker Swarm 단일 스택(`docker-stack.yml`)
 - 레지스트리: GHCR (`ghcr.io/antam2010/kmcbeauty-api:<git-sha>`)
 - CI/CD: GitHub Actions (`.github/workflows/ci.yml`, `cd.yml`)
-- MySQL 은 컨테이너 외부(관리형/호스트)에 존재하며 이 스택에 포함하지 않는다.
+- PostgreSQL 은 컨테이너 외부(관리형/호스트)에 존재하며 이 스택에 포함하지 않는다.
 
 ---
 
@@ -42,7 +42,7 @@ KMCBeauty API 의 Docker Swarm 무중단 배포 · CI/CD · 시크릿/마이그�
 |---|---|---|---|---|
 | `kmc_secret_key_v1` | `SECRET_KEY` | `/run/secrets/SECRET_KEY` | JWT 서명 키 | 배포 운영자 |
 | `kmc_fernet_key_v1` | `FERNET_KEY` | `/run/secrets/FERNET_KEY` | Fernet 대칭키(44자) | 배포 운영자 |
-| `kmc_database_url_v1` | `DATABASE_URL` | `/run/secrets/DATABASE_URL` | 외부 MySQL 접속 URL | 배포 운영자 |
+| `kmc_database_url_v1` | `DATABASE_URL` | `/run/secrets/DATABASE_URL` | 외부 PostgreSQL 접속 URL | 배포 운영자 |
 | `firebase_service_account` | (env 경로 주입) | `/run/secrets/firebase_service_account` | FCM 서비스 계정 키 | 배포 운영자 |
 
 - **핵심 규약**: external 이름은 소문자 + 버전 suffix(`_v1`), `secrets.target` 은 pydantic
@@ -147,7 +147,7 @@ IMAGE_TAG=ghcr.io/antam2010/kmcbeauty-api:<sha> ./scripts/deploy_migrate.sh
 
 # 로컬 단일 노드: Docker secret 전환 후 .env.prod 에 DATABASE_URL 이 없으므로
 # 운영자가 반드시 DATABASE_URL 을 export 해야 한다(미설정 시 fail-fast).
-export DATABASE_URL='mysql+pymysql://user:pass@host:3306/db?charset=utf8mb4'
+export DATABASE_URL='postgresql+psycopg://user:pass@host:5432/db'
 ./scripts/deploy_migrate.sh --local
 ```
 

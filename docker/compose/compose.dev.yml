@@ -1,18 +1,23 @@
 # ==============================================================================
 # 로컬 개발용 Compose (SPEC-INFRA-001, REQ-INFRA-012)
 #
-# 목적: 로컬 개발 스택 전체를 compose 로 기동한다 (앱 + Redis 필수, MySQL/워커 선택).
+# 목적: 로컬 개발 스택 전체를 compose 로 기동한다 (앱 + Redis 필수, 워커 선택).
 #   docker compose -f docker/compose/compose.dev.yml up -d --build        # api + redis
-#   docker compose -f docker/compose/compose.dev.yml --profile mysql up -d   # + MySQL
 #   docker compose -f docker/compose/compose.dev.yml --profile worker up -d  # + Celery 워커
+#   docker compose -f docker/compose/compose.dev.yml exec api alembic upgrade head  # 마이그레이션
 #   docker compose -f docker/compose/compose.dev.yml down                 # 종료
+#
+# 마이그레이션(alembic)은 반드시 컨테이너 안에서 실행한다 — WSL 셸에서는 Windows 방화벽
+#   때문에 Windows 호스트의 PostgreSQL 에 접근할 수 없다.
 #
 # 핫리로드: 소스를 바인드 마운트하고 uvicorn --reload 로 실행하므로
 #   코드 저장 즉시 반영된다(이미지 재빌드는 requirements.txt 변경 시에만 필요).
 #
 # ⚠️ 개발 전용(DEV ONLY): 이 파일은 운영에 사용하지 않는다.
 #   운영 배포는 docker-stack.yml(Swarm) — 시크릿/헬스 게이팅/무중단 롤링 포함.
-#   운영 MySQL 은 컨테이너 외부(관리형/호스트)에 있으며 여기의 mysql 은 순수 로컬 편의용.
+#   DB 는 compose 에 포함하지 않는다 — Windows 호스트에서 네이티브로 실행하는
+#   PostgreSQL 을 컨테이너에서 host.docker.internal:5432 로 접근한다(데이터베이스 kmcbeauty).
+#   접속 정보는 .env 의 DATABASE_URL 로 설정한다.
 # ==============================================================================
 
 # compose 프로젝트 이름 (Docker Desktop 그룹명·컨테이너 접두사)
@@ -48,8 +53,9 @@ services:
       # 소스 바인드 마운트 → uvicorn --reload 핫리로드
       - ../..:/app
     extra_hosts:
-      # .env 의 DATABASE_URL 이 호스트의 DB(localhost)를 가리키면
-      # 컨테이너 안에서는 host.docker.internal 로 바꿔야 한다.
+      # 호스트 PostgreSQL(host.docker.internal:5432) 접근용.
+      # .env 의 DATABASE_URL 호스트는 localhost 가 아니라 host.docker.internal 로 지정한다
+      # (컨테이너 안의 localhost 는 컨테이너 자신이다).
       - "host.docker.internal:host-gateway"
     depends_on:
       - redis
@@ -69,6 +75,7 @@ services:
     volumes:
       - ../..:/app
     extra_hosts:
+      # api 와 동일 — 호스트 PostgreSQL(host.docker.internal:5432) 접근용.
       - "host.docker.internal:host-gateway"
     # 이미지 내장 HEALTHCHECK(curl /health)는 웹서버 전용 — celery 에는 비활성.
     healthcheck:
@@ -86,23 +93,5 @@ services:
     volumes:
       - redis_dev_data:/data
 
-  # --- MySQL (선택) : `--profile mysql` 로만 기동 -----------------------------
-  # 운영 DB 를 대체하지 않는 순수 로컬 개발 편의용.
-  mysql:
-    image: mysql:8.0
-    profiles: ["mysql"]
-    environment:
-      TZ: Asia/Seoul
-      MYSQL_ROOT_PASSWORD: devroot
-      MYSQL_DATABASE: kmcbeauty
-      MYSQL_USER: kmc
-      MYSQL_PASSWORD: kmc
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_dev_data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
-
 volumes:
   redis_dev_data:
-  mysql_dev_data:
