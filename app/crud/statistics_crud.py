@@ -323,7 +323,8 @@ def get_staff_summary(
         .join(User, Treatment.staff_user_id == User.id)
         .where(Treatment.shop_id == shop_id)
         .where(Treatment.staff_user_id.is_not(None))
-        .group_by(Treatment.staff_user_id)
+        # PostgreSQL 은 비집계 SELECT 컬럼(users.name)이 GROUP BY 에 없으면 거부한다.
+        .group_by(Treatment.staff_user_id, User.name)
     )
     stmt = apply_date_range_filter(
         stmt,

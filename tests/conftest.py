@@ -15,10 +15,12 @@ os.environ.setdefault("REFRESH_TOKEN_EXPIRE_SECONDS", "1209600")
 os.environ.setdefault("APP_ENV", "local")
 # Settings 필수 필드. 테스트는 DB 를 전부 모킹하므로 실제 연결되지 않는다
 # (create_engine 은 pool_pre_ping 이어도 import 시점에 접속하지 않음).
+# 단, create_engine 은 import 시점에 URL 의 DBAPI(psycopg)를 import 하므로
+# 해당 드라이버는 설치되어 있어야 한다.
 # CI 처럼 .env 파일이 없는 환경에서도 수집이 가능해야 한다.
 os.environ.setdefault(
     "DATABASE_URL",
-    "mysql+pymysql://test:test@localhost:3306/test?charset=utf8mb4",
+    "postgresql+psycopg://test:test@localhost:5432/test",
 )
 os.environ.setdefault("SENTRY_DSN", "")
 # Fernet 키(url-safe base64 인코딩된 32바이트, 정확히 44자). security.py 가

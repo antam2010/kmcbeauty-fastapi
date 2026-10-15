@@ -77,6 +77,11 @@ platformdirs==4.3.7
 prompt_toolkit==3.0.51
 proto-plus==1.26.1
 protobuf==6.32.1
+# psycopg v3: PostgreSQL 드라이버(SQLAlchemy URL 스킴 postgresql+psycopg://).
+# psycopg-binary 는 libpq 를 동봉한 바이너리 휠이라 시스템 libpq/빌드 도구 없이
+# 설치된다. psycopg[binary] 와 동일하게 두 패키지는 반드시 같은 버전으로 짝을 맞춘다.
+psycopg==3.3.6
+psycopg-binary==3.3.6
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycodestyle==2.13.0
@@ -90,7 +95,6 @@ pydantic-settings==2.14.2
 pyflakes==3.3.2
 Pygments==2.19.1
 PyJWT==2.10.1
-PyMySQL==1.2.0
 pyparsing==3.2.5
 pytest==8.4.2
 # pytest-cov: CI 커버리지 리포트 생성용(--cov-fail-under 게이트는 두지 않음, SPEC-INFRA-001 REQ-INFRA-006).

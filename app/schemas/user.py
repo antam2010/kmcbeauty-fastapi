@@ -1,15 +1,21 @@
 from datetime import datetime
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
-from pydantic import EmailStr, Field, model_validator
+from pydantic import AfterValidator, EmailStr, Field, model_validator
 
 from app.enum.role import UserRole
 from app.schemas.mixin.base import BaseResponseModel
+from app.utils.email import normalize_email
+
+# 저장·식별용 이메일 타입: EmailStr 형식 검증 후 소문자 정규형으로 바꾼다.
+# EmailStr 은 도메인만 소문자화하고 로컬 파트 대소문자는 보존하므로, 대소문자를
+# 구분하는 PostgreSQL 에서 대소문자만 다른 중복 가입을 막으려면 정규화가 필요하다.
+NormalizedEmailStr = Annotated[EmailStr, AfterValidator(normalize_email)]
 
 
 class UserBase(BaseResponseModel):
     name: str = Field(..., min_length=3, max_length=50, description="이름")
-    email: EmailStr = Field(..., description="유효한 이메일 주소")
+    email: NormalizedEmailStr = Field(..., description="유효한 이메일 주소")
 
 
 class UserRoleMixin(BaseResponseModel):

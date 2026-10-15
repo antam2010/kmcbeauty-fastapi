@@ -1,9 +1,9 @@
 from typing import ClassVar
 
-from pydantic import EmailStr, Field
+from pydantic import Field
 
 from app.schemas.mixin.base import BaseResponseModel
-from app.schemas.user import UserResponse
+from app.schemas.user import NormalizedEmailStr, UserResponse
 
 
 class ShopUserBase(BaseResponseModel):
@@ -33,7 +33,7 @@ class ShopUserAssociateRequest(BaseResponseModel):
     (계정 생성/권한 결정은 이 계약의 범위가 아니며 SECURITY-001 소관).
     """
 
-    email: EmailStr = Field(..., description="연결할 대상 유저의 이메일")
+    email: NormalizedEmailStr = Field(..., description="연결할 대상 유저의 이메일")
     is_primary_owner: int = Field(
         0,
         ge=0,

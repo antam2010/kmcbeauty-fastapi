@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 
 from app.models.user import User
+from app.utils.email import normalize_email
 
 
 def create_user(db: Session, user_data: dict) -> User:
@@ -36,12 +37,19 @@ def update_user_db(_db: Session, user: User, user_data: dict) -> User:
     return user
 
 
+# @MX:ANCHOR: [AUTO] 이메일 기준 유저 조회 단일 진입점(로그인·중복 체크·샵 유저 연결)
+# @MX:REASON: PostgreSQL 은 대소문자를 구분하므로 여기서 normalize_email 로 정규화해야
+#             소문자 저장 규약(NormalizedEmailStr)과 일치한다. 호출부는 원본 입력을
+#             그대로 넘긴다. func.lower(User.email) 로 바꾸면 unique 인덱스를 못 탄다.
 def get_user_by_email(db: Session, email: str) -> User | None:
     """이메일 기준 사용자 단순 조회 (권한 체크 없음, 소프트삭제 제외).
 
     소프트삭제된(deleted_at IS NOT NULL) 유저는 로그인 인증 대상에서 제외한다.
     (SPEC-FIX-001 REQ-FIX-001: 삭제 유저 재로그인 차단)
+
+    이메일은 저장 규약과 같은 소문자 정규형으로 바꾼 뒤 비교한다.
     """
+    email = normalize_email(email)
     return db.query(User).filter(User.email == email, User.deleted_at.is_(None)).first()
 
 

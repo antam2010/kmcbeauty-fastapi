@@ -24,13 +24,13 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Asia/Seoul
 
 # 시스템 패키지 설치
-#  - build-essential / default-libmysqlclient-dev / pkg-config: PyMySQL 는 순수 파이썬이지만
-#    cryptography 등 네이티브 휠 빌드가 필요한 경우를 대비해 빌드 도구를 포함한다.
+#  - build-essential / pkg-config: PostgreSQL 드라이버 psycopg v3 는 바이너리 휠
+#    (psycopg-binary, libpq 동봉)로 설치하므로 시스템 libpq 빌드가 필요 없다.
+#    cryptography 등 네이티브 휠 빌드가 필요한 경우를 대비해 빌드 도구만 포함한다.
 #  - curl: HEALTHCHECK 에서 사용.
 # 설치 후 apt 캐시를 제거해 이미지 크기를 줄인다.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
-        default-libmysqlclient-dev \
         pkg-config \
         curl \
         tzdata \
