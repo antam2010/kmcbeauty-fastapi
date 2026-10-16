@@ -195,6 +195,7 @@ class FakeSession:
 NOW = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
 SHOP_A, SHOP_B = 10, 20
 CURRENT_SHOP = SimpleNamespace(id=SHOP_A, user_id=1)  # 원장 1 이 선택한 상점 A
+REQUESTER = SimpleNamespace(id=1)  # 요청자(원장 1). 생성 시 created_user_id 로 기록
 
 
 def _detail(detail_id: int, menu_id: int, deleted_at: datetime | None = None) -> object:
@@ -319,6 +320,7 @@ def _upsert(
         db=db,
         data=data,
         current_shop=CURRENT_SHOP,
+        current_user=REQUESTER,
         treatment_id=treatment_id,
     )
 

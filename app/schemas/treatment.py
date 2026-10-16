@@ -50,9 +50,14 @@ class TreatmentCreate(TreatmentBase):
 class TreatmentUpdate(TreatmentBase):
     """시술 수정 스키마."""
 
-    treatment_items: list[TreatmentItemUpdate] = Field(
-        default_factory=list,
-        description="시술 항목 리스트",
+    # 다른 필드처럼 부분 수정이다. 생략/null 이면 기존 항목을 그대로 두고, 목록을
+    # 보내면 그 목록으로 맞춘다(빈 목록은 항목 전체 삭제).
+    treatment_items: list[TreatmentItemUpdate] | None = Field(
+        None,
+        description=(
+            "시술 항목 리스트. 생략하거나 null 이면 기존 항목을 유지하고, "
+            "목록을 보내면 그 목록으로 교체한다(빈 목록이면 전체 삭제)."
+        ),
     )
 
 

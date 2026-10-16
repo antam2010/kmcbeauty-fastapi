@@ -3,9 +3,11 @@ from fastapi_pagination import Page
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.dependencies.shop import get_current_shop
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
 from app.models.shop import Shop
+from app.models.user import User
 from app.schemas.treatment import (
     TreatmentCreate,
     TreatmentFilter,
@@ -60,8 +62,14 @@ def create_treatment_api(
     data: TreatmentCreate,
     db: Session = Depends(get_db),
     current_shop: Shop = Depends(get_current_shop),
+    current_user: User = Depends(get_current_user),
 ) -> TreatmentSimpleResponse:
-    return upsert_treatment_service(data=data, db=db, current_shop=current_shop)
+    return upsert_treatment_service(
+        data=data,
+        db=db,
+        current_shop=current_shop,
+        current_user=current_user,
+    )
 
 
 @router.put(
@@ -84,11 +92,13 @@ def update_treatment_api(
     data: TreatmentUpdate,
     db: Session = Depends(get_db),
     current_shop: Shop = Depends(get_current_shop),
+    current_user: User = Depends(get_current_user),
 ) -> TreatmentSimpleResponse:
     return upsert_treatment_service(
         data=data,
         db=db,
         current_shop=current_shop,
+        current_user=current_user,
         treatment_id=treatment_id,
     )
 

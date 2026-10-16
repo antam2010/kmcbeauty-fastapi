@@ -17,6 +17,7 @@ from app.exceptions import CustomException
 from app.models.shop import Shop
 from app.models.treatment import Treatment
 from app.models.treatment_item import TreatmentItem
+from app.models.user import User
 from app.schemas.treatment import (
     TreatmentCreate,
     TreatmentFilter,
@@ -68,6 +69,7 @@ def upsert_treatment_service(
     db: Session,
     data: TreatmentCreate | TreatmentUpdate,
     current_shop: Shop,
+    current_user: User,
     treatment_id: int | None = None,
 ) -> TreatmentSimpleResponse:
     """시술 예약을 생성하거나 업데이트하는 서비스.
@@ -75,21 +77,25 @@ def upsert_treatment_service(
     :param db: DB 세션
     :param data: TreatmentCreate 또는 TreatmentUpdate 모델
     :param current_shop: 현재 상점
+    :param current_user: 요청자. 생성 시 created_user_id 로 기록한다(수정은 불변).
     :param treatment_id: 시술 예약 ID (업데이트 시 필요)
     :return: TreatmentResponse 모델
     """
     try:
         if treatment_id is None:
-            treatment = _create_treatment(db, data, current_shop)
+            treatment = _create_treatment(db, data, current_shop, current_user)
         else:
             treatment = _update_treatment(db, data, current_shop, treatment_id)
 
-        _upsert_treatment_items(
-            db,
-            treatment.id,
-            current_shop.id,
-            data.treatment_items,
-        )
+        # 수정에서 항목이 생략/null(None)이면 기존 항목을 건드리지 않는다.
+        # 생성(TreatmentCreate)은 기본값이 빈 목록이라 항상 이 경로를 탄다.
+        if data.treatment_items is not None:
+            _upsert_treatment_items(
+                db,
+                treatment.id,
+                current_shop.id,
+                data.treatment_items,
+            )
 
         db.commit()
         db.refresh(treatment)
@@ -196,7 +202,12 @@ def _ensure_staff_in_shop(db: Session, shop_id: int, staff_user_id: int) -> None
         raise _invalid_reference(_INVALID_STAFF_USER)
 
 
-def _create_treatment(db: Session, data: TreatmentCreate, shop: Shop) -> Treatment:
+def _create_treatment(
+    db: Session,
+    data: TreatmentCreate,
+    shop: Shop,
+    current_user: User,
+) -> Treatment:
     # 생성 시 고객/담당자 참조는 INSERT 이전에 검증한다. 시술 항목은
     # _upsert_treatment_items 가 항목 쓰기 전에 검증하고, 실패하면 서비스가 롤백한다.
     if data.phonebook_id is not None:
@@ -206,7 +217,8 @@ def _create_treatment(db: Session, data: TreatmentCreate, shop: Shop) -> Treatme
 
     create_data = data.model_dump(exclude={"treatment_items"})
     create_data["shop_id"] = shop.id
-    create_data["created_user_id"] = shop.user_id
+    # 생성자는 요청자다(상점 원장 shop.user_id 가 아님 — 직원이 만든 예약 포함).
+    create_data["created_user_id"] = current_user.id
     treatment = Treatment(**create_data)
     return create_treatment(db, treatment)
 

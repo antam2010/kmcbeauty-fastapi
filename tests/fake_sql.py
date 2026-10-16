@@ -13,6 +13,7 @@ CI 에는 실DB 가 없다. CRUD 가 만든 실제 문(statement)을 SQL 의미�
 - 집계: count(*), count(x), count(DISTINCT x), sum(x)
 - ORDER BY(ASC/DESC, PG 기본 NULL 순서), LIMIT / OFFSET
 - 레거시 db.query(...) 체인(all/first)과 Query.update(), commit/rollback/close 기록
+- add/flush(id·타임스탬프 부여)/delete(커밋 시 반영)/refresh
 
 joinedload 같은 로더 옵션은 떼고 평가한다. ORM 은 컬렉션 eager load 에 LIMIT 가
 붙으면 원래 문을 서브쿼리로 감싸 LIMIT 를 먼저 적용하고 eager JOIN 은 바깥에 붙인다.
@@ -25,6 +26,7 @@ joinedload 같은 로더 옵션은 떼고 평가한다. ORM 은 컬렉션 eager 
 저장 규약).
 """
 
+import itertools
 import operator
 import re
 from collections import defaultdict, namedtuple
@@ -143,7 +145,16 @@ class _FakeQuery(Query):
     fake_db: "FakeSQLSession"
 
     def all(self) -> list:
-        return self.fake_db.execute(self.statement).all()
+        rows = self.fake_db.execute(self.statement).all()
+        (desc, *rest) = self.column_descriptions
+        if (
+            not rest
+            and desc.get("entity") is not None
+            and desc["expr"] is desc["entity"]
+        ):
+            # db.query(Model).all() 은 Row 가 아니라 엔티티 객체 목록을 돌려준다.
+            return [row[0] for row in rows]
+        return rows
 
     def first(self) -> object | None:
         rows = self.limit(1).all()
@@ -181,12 +192,33 @@ class FakeSQLSession:
         self.statements: list[Select] = []
         self.tie_order = tie_order
         self.updates: list[list[int]] = []  # Query.update() 가 바꾼 행 id(호출별)
+        self.added: list = []  # add() 된 객체 전체(관찰용)
+        self.deleted: list = []  # 커밋으로 삭제된 객체(관찰용)
+        self._pending_deletes: list = []
+        self._ids = itertools.count(90000)
         self.commit_count = 0
         self.rollback_count = 0
         self.closed = False
 
     def rows(self, table_name: str) -> list:
         return list(self.tables[table_name])
+
+    def add(self, obj: object) -> None:
+        self.added.append(obj)
+
+    def flush(self) -> None:
+        """INSERT 시뮬레이션: PK/타임스탬프를 채우고 조회 대상 행으로 등록한다."""
+        for obj in self.added:
+            if obj.id is None:
+                obj.id = next(self._ids)
+                obj.created_at = obj.updated_at = datetime.now(UTC)
+                self.tables[obj.__tablename__].append(obj)
+
+    def delete(self, obj: object) -> None:
+        self._pending_deletes.append(obj)
+
+    def refresh(self, obj: object) -> None:
+        """DB 재조회 없음(PK/타임스탬프는 flush 에서 채운다)."""
 
     def query(self, *entities: object) -> _FakeQuery:
         query = _FakeQuery(entities)
@@ -202,9 +234,15 @@ class FakeSQLSession:
         return rows[0][0] if rows else None
 
     def commit(self) -> None:
+        self.flush()
+        for obj in self._pending_deletes:
+            self.tables[obj.__tablename__].remove(obj)
+            self.deleted.append(obj)
+        self._pending_deletes.clear()
         self.commit_count += 1
 
     def rollback(self) -> None:
+        self._pending_deletes.clear()
         self.rollback_count += 1
 
     def close(self) -> None:
