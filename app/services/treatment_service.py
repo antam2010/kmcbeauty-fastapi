@@ -3,6 +3,8 @@ from fastapi_pagination import Page
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.crud.phonebook_crud import get_phonebook_by_id
+from app.crud.shop_user_crud import get_shop_user
 from app.crud.treatment_crud import (
     create_treatment,
     get_treatment_by_id,
@@ -82,7 +84,12 @@ def upsert_treatment_service(
         else:
             treatment = _update_treatment(db, data, current_shop, treatment_id)
 
-        _upsert_treatment_items(db, treatment.id, data.treatment_items)
+        _upsert_treatment_items(
+            db,
+            treatment.id,
+            current_shop.id,
+            data.treatment_items,
+        )
 
         db.commit()
         db.refresh(treatment)
@@ -157,7 +164,46 @@ def cancel_treatment_service(
         ) from e
 
 
+# 참조 검증 실패 메시지(필드별 단일). 없음/타 샵/삭제됨을 구분하지 않는다.
+_INVALID_PHONEBOOK = "고객 정보(phonebook_id)가 유효하지 않습니다."
+_INVALID_STAFF_USER = "시술 담당자(staff_user_id)가 유효하지 않습니다."
+_INVALID_MENU_DETAIL = "시술 항목(menu_detail_id)이 유효하지 않습니다."
+
+
+# @MX:NOTE: [AUTO] 교차 테넌트 FK 방지 — 클라이언트가 보낸 참조 id
+#            (phonebook_id / staff_user_id / menu_detail_id)는 현재 샵 소속일
+#            때만 저장한다. GET /treatments 가 phonebook 과 staff_user 를
+#            joinedload 하므로 미검증 참조는 타 샵 고객정보와 유저 이메일을
+#            유출한다. 실패는 필드별 단일 400 이라 존재 여부 오라클이 없다.
+def _invalid_reference(detail: str) -> CustomException:
+    return CustomException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        domain=DOMAIN,
+        detail=detail,
+        hint="현재 상점에 속한 유효한 대상만 지정할 수 있습니다.",
+    )
+
+
+def _ensure_phonebook_in_shop(db: Session, shop_id: int, phonebook_id: int) -> None:
+    # get_phonebook_by_id 는 shop_id 와 소프트삭제 제외를 함께 필터한다.
+    if get_phonebook_by_id(db, phonebook_id, shop_id) is None:
+        raise _invalid_reference(_INVALID_PHONEBOOK)
+
+
+def _ensure_staff_in_shop(db: Session, shop_id: int, staff_user_id: int) -> None:
+    # 시술 담당자는 현재 샵 멤버(shop_user 행)여야 한다.
+    if get_shop_user(db, shop_id, staff_user_id) is None:
+        raise _invalid_reference(_INVALID_STAFF_USER)
+
+
 def _create_treatment(db: Session, data: TreatmentCreate, shop: Shop) -> Treatment:
+    # 생성 시 고객/담당자 참조는 INSERT 이전에 검증한다. 시술 항목은
+    # _upsert_treatment_items 가 항목 쓰기 전에 검증하고, 실패하면 서비스가 롤백한다.
+    if data.phonebook_id is not None:
+        _ensure_phonebook_in_shop(db, shop.id, data.phonebook_id)
+    if data.staff_user_id is not None:
+        _ensure_staff_in_shop(db, shop.id, data.staff_user_id)
+
     create_data = data.model_dump(exclude={"treatment_items"})
     create_data["shop_id"] = shop.id
     create_data["created_user_id"] = shop.user_id
@@ -179,6 +225,16 @@ def _update_treatment(
             detail="시술 예약을 찾을 수 없습니다.",
         )
     update_data = data.model_dump(exclude={"treatment_items"}, exclude_unset=True)
+
+    # 기존 예약 편집 비파괴: 값이 지정되고(None 아님) 현재 값과 다를 때만 검증한다.
+    # 이후 소프트삭제된 고객이나 샵을 떠난 담당자를 그대로 유지하는 수정은 허용한다.
+    phonebook_id = update_data.get("phonebook_id")
+    if phonebook_id is not None and phonebook_id != treatment.phonebook_id:
+        _ensure_phonebook_in_shop(db, shop.id, phonebook_id)
+    staff_user_id = update_data.get("staff_user_id")
+    if staff_user_id is not None and staff_user_id != treatment.staff_user_id:
+        _ensure_staff_in_shop(db, shop.id, staff_user_id)
+
     for key, value in update_data.items():
         setattr(treatment, key, value)
     return treatment
@@ -187,21 +243,29 @@ def _update_treatment(
 def _upsert_treatment_items(
     db: Session,
     treatment_id: int,
+    shop_id: int,
     items: list[TreatmentItemCreate],
 ) -> None:
     existing_items = get_treatment_items_by_treatment_id(db, treatment_id)
     existing_items_map = {item.id: item for item in existing_items}
     received_ids = set()
 
-    for item in items:
-        menu_detail = validate_menu_detail_exists(db, item.menu_detail_id)
-        if not menu_detail:
-            raise CustomException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                domain=DOMAIN,
-                detail=f"시술 항목 ID {item.menu_detail_id}이 존재하지 않습니다.",
-            )
+    # 이 예약이 이미 참조 중인 상세 ID 는 신규 참조가 아니다. 이후 소프트삭제되었어도
+    # 유지할 수 있다(클라이언트가 수정 시 항목 id 없이 전체를 재전송하는 경우 포함).
+    referenced_detail_ids = {item.menu_detail_id for item in existing_items}
 
+    # 쓰기 전에 모든 항목을 검증한다.
+    # 샵 소유권은 항상 검사하고, 삭제 상태는 신규 참조만 검사한다.
+    for item in items:
+        if item.menu_detail_id is None or not validate_menu_detail_exists(
+            db,
+            item.menu_detail_id,
+            shop_id,
+            exclude_deleted=item.menu_detail_id not in referenced_detail_ids,
+        ):
+            raise _invalid_reference(_INVALID_MENU_DETAIL)
+
+    for item in items:
         if getattr(item, "id", None) and item.id in existing_items_map:
             treatment_item = existing_items_map[item.id]
             treatment_item.menu_detail_id = item.menu_detail_id

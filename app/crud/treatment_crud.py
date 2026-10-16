@@ -7,6 +7,7 @@ from app.enum.treatment_status import TreatmentStatus
 from app.models.phonebook import Phonebook
 from app.models.treatment import Treatment
 from app.models.treatment_item import TreatmentItem
+from app.models.treatment_menu import TreatmentMenu
 from app.models.treatment_menu_detail import TreatmentMenuDetail
 from app.schemas.treatment import TreatmentAutoComplete, TreatmentFilter
 from app.utils.query import apply_date_range_filter
@@ -119,11 +120,37 @@ def get_treatment_list(
     return paginate(db, stmt)
 
 
+# @MX:NOTE: [AUTO] 테넌트 경계 — 시술 항목이 참조할 상세는 현재 샵 메뉴 소속뿐이다.
+#            id 단독 조회는 타 샵 상세 참조(교차 테넌트 FK)를 허용했으므로
+#            TreatmentMenu 조인으로 shop_id 를 항상 강제한다. 호출부는 삭제 상태
+#            검사만 끌 수 있다(이미 참조 중인 상세 유지).
 def validate_menu_detail_exists(
     db: Session,
     menu_detail_id: int,
+    shop_id: int,
+    *,
+    exclude_deleted: bool = True,
 ) -> TreatmentMenuDetail | None:
-    return db.query(TreatmentMenuDetail).filter_by(id=menu_detail_id).first()
+    """현재 샵 메뉴에 속한 시술 상세를 조회한다(없거나 타 샵 소속이면 None).
+
+    :param exclude_deleted: True 면 상세와 상위 메뉴가 모두 소프트삭제되지 않은 경우만
+        반환한다(신규 참조). 예약이 이미 참조 중인 상세를 유지할 때는 False 로 호출해
+        샵 소유권만 검증한다.
+    """
+    query = (
+        db.query(TreatmentMenuDetail)
+        .join(TreatmentMenu, TreatmentMenuDetail.menu_id == TreatmentMenu.id)
+        .filter(
+            TreatmentMenuDetail.id == menu_detail_id,
+            TreatmentMenu.shop_id == shop_id,
+        )
+    )
+    if exclude_deleted:
+        query = query.filter(
+            TreatmentMenuDetail.deleted_at.is_(None),
+            TreatmentMenu.deleted_at.is_(None),
+        )
+    return query.first()
 
 
 def get_treatment_items_by_treatment_id(
