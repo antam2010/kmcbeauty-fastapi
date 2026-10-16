@@ -240,6 +240,10 @@ def test_autocomplete_invalidates_affected_shop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db = _world()
+    # 자동완료 대상은 직원이 방문 처리한 예약(VISITED)뿐이다.
+    for treatment in db.rows("treatment"):
+        if treatment.id in {2, 3}:
+            treatment.status = TreatmentStatus.VISITED
     assert _dashboard(db, OCT_15)["summary"]["target_date"]["completed"] == 0
 
     # 10월 15일 저녁(UTC) 기준이면 그날 오전 예약 2건은 이미 끝났다.

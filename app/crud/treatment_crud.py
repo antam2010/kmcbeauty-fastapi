@@ -182,17 +182,23 @@ def get_treatment_items_by_treatment_id(
 AUTOCOMPLETE_BATCH_SIZE = 100
 
 
-# @MX:NOTE: [AUTO] 자동완료 대상 판정은 SQL 에서 한다(종료 시각 = reserved_at +
-#            항목 소요시간 합 <= now). 시간 조건 없이 LIMIT 만 걸면 미래 예약이 배치를
-#            채워 이미 끝난 예약이 영영 완료되지 않는다(실매출 = COMPLETED 과소 집계).
-#            항목 없는 예약은 내부 조인으로 제외된다(자동완료 대상 아님, 기존 정책).
+# @MX:NOTE: [AUTO] 자동완료 대상 판정은 SQL 에서 한다(상태 = 직원이 방문 처리한
+#            VISITED, 종료 시각 = reserved_at + 항목 소요시간 합 <= now). RESERVED 는
+#            노쇼일 수 있어 대상이 아니다(직원이 방문/노쇼를 고른다). 시간 조건 없이
+#            LIMIT 만 걸면 미래 예약이 배치를 채워 이미 끝난 예약이 영영 완료되지
+#            않는다(실매출 = COMPLETED 과소 집계). 항목 없는 예약은 내부 조인으로
+#            제외된다(자동완료 대상 아님, 기존 정책).
 def get_treatments_to_autocomplete(
     db: Session,
     now: datetime | None = None,
     *,
     limit: int = AUTOCOMPLETE_BATCH_SIZE,
 ) -> list[TreatmentAutoComplete]:
-    """종료 시각이 now 이하인 미완료 예약을 오래된 순으로 최대 limit 건 반환한다.
+    """종료 시각이 now 이하인 방문(VISITED) 예약을 오래된 순으로 최대 limit 건 반환한다.
+
+    자동완료 대상은 직원이 방문 처리한 VISITED 뿐이다
+    (TreatmentStatus.autocomplete_statuses). 종료 시각이 지난 RESERVED 는 반환하지
+    않는다. RESERVED 로 남겨 직원이 방문/노쇼를 직접 고르게 한다.
 
     :param now: 판정 기준 시각. reserved_at 저장 규약과 같은 UTC naive 이며 기본값은
         현재 시각이다.
@@ -214,7 +220,7 @@ def get_treatments_to_autocomplete(
         )
         .join(TreatmentItem, TreatmentItem.treatment_id == Treatment.id)
         .filter(
-            Treatment.status.in_(TreatmentStatus.unfinished_statuses()),
+            Treatment.status.in_(TreatmentStatus.autocomplete_statuses()),
             Treatment.finished_at.is_(None),
             # 시작 전 예약은 끝났을 수 없다(집계 전에 거른다).
             Treatment.reserved_at <= now,

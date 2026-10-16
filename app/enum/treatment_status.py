@@ -22,6 +22,16 @@ class TreatmentStatus(str, Enum):
     def unfinished_statuses(cls) -> list[str]:
         return [cls.RESERVED, cls.VISITED]
 
+    # @MX:NOTE: [AUTO] 자동완료 정책 — 직원이 방문 처리한 VISITED 만 자동완료한다.
+    #            RESERVED 는 노쇼일 수 있어 종료 시각이 지나도 그대로 두고, 직원이
+    #            방문/노쇼를 직접 고른다. 결제 수단 기본값이 CARD 라 자동완료하면
+    #            실매출로 잡히고 노쇼로 집계되지 않는다. unfinished_statuses() 로
+    #            바꾸지 말 것(조회 조건과 UPDATE 재확인이 함께 쓴다).
+    @classmethod
+    def autocomplete_statuses(cls) -> list[str]:
+        """자동완료 대상 상태(직원이 방문 처리한 VISITED 만)."""
+        return [cls.VISITED]
+
     @classmethod
     def for_expected_sales(cls) -> list[str]:
         """예상매출에 포함할 상태들."""

@@ -16,9 +16,11 @@
 요구 동작:
 - 종료 시각(reserved_at + 항목 소요시간 합)이 now(UTC) 이하인 예약만 SQL 에서 고르고,
   reserved_at 순으로 배치를 소진할 때까지(상한 있는 루프) 처리한다.
-- UPDATE 는 미완료 상태와 finished_at IS NULL 을 다시 확인한다.
+- UPDATE 는 자동완료 대상 상태(VISITED)와 finished_at IS NULL 을 다시 확인한다.
 - 항목 입력값에 범위를 둔다(duration_min 0~1440, base_price 0 이상). 위반은 422 다.
-- 노쇼 자동완료 여부 등 상태·결제 정책은 바꾸지 않는다(제품 결정 대기).
+- 자동완료 대상은 직원이 방문 처리한 VISITED 뿐이다(제품 결정,
+  test_treatment_autocomplete_visited_only_fix.py). 그래서 이 파일의 예약은 기본
+  VISITED 다.
 
 tests/fake_sql.py 평가기로 실제 조회문과 UPDATE 조건을 DB 없이 실행한다.
 """
@@ -45,9 +47,9 @@ def _treatment(
     treatment_id: int,
     reserved_at: datetime,
     *durations: int,
-    status: TreatmentStatus = TreatmentStatus.RESERVED,
+    status: TreatmentStatus = TreatmentStatus.VISITED,
 ) -> list[object]:
-    """예약 1건과 소요시간별 항목 행을 만든다(상점은 id 로 분산)."""
+    """예약 1건과 소요시간별 항목 행을 만든다(상점은 id 로 분산, 기본 상태 VISITED)."""
     treatment = Treatment(
         id=treatment_id,
         shop_id=10 + treatment_id % 3,
@@ -191,8 +193,8 @@ def test_in_progress_itemless_and_finished_states_are_left_alone(
     run_task(db)
 
     assert _completed_ids(db) == [5, 6]
-    assert _status(db, 1) == TreatmentStatus.RESERVED
-    assert _status(db, 2) == TreatmentStatus.RESERVED
+    assert _status(db, 1) == TreatmentStatus.VISITED
+    assert _status(db, 2) == TreatmentStatus.VISITED
     assert _status(db, 3) == TreatmentStatus.CANCELLED
     assert _status(db, 4) == TreatmentStatus.NO_SHOW
 

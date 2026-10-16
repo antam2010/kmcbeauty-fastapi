@@ -36,21 +36,31 @@ def _is_elapsed(row: TreatmentAutoComplete, now: datetime) -> bool:
     return elapsed_seconds >= float(row.total_duration_min) * 60
 
 
-# @MX:WARN: [AUTO] 자동완료 판정은 타임존/NULL/동시성 경계에 민감하다.
+# @MX:WARN: [AUTO] 자동완료 판정은 타임존/NULL/동시성 경계와 대상 상태 정책에 민감하다.
 # @MX:REASON: (1) reserved_at 는 naive DateTime 컬럼이며 저장 규약이 UTC(앱이 UTC ISO
 #             전송, 서버 TimestampMixin/SoftDeleteMixin 모두 UTC 사용)이므로 비교 기준을
 #             반드시 UTC-naive 로 맞춰야 한다. 이전 now_kst().replace(tzinfo=None) 는
 #             KST-naive 로 9시간 어긋나 오판정을 유발했다(SPEC-FIX-001 REQ-FIX-004).
 #             (2) 항목 없는 시술은 total_duration_min(SUM)이 None 이라 건너뛴다.
-#             (3) 조회와 UPDATE 사이에 취소·노쇼 처리된 예약을 덮어쓰지 않도록
-#             UPDATE 가 미완료 조건을 다시 확인한다.
+#             (3) 대상은 직원이 방문 처리한 VISITED 뿐이다(autocomplete_statuses).
+#             RESERVED 를 완료하면 노쇼일 수 있는 예약이 결제 수단 기본값(CARD)으로
+#             실매출에 잡히고 노쇼로 집계되지 않는다. RESERVED 는 직원이 방문/노쇼를
+#             고른다.
+#             (4) 조회와 UPDATE 사이에 VISITED 가 아니게 된(취소·노쇼·예약으로 되돌림)
+#             예약을 덮어쓰지 않도록 UPDATE 가 같은 대상 상태와 finished_at IS NULL
+#             을 다시 확인한다.
 @celery_app.task
 def auto_complete_treatment() -> None:
+    """종료 시각이 지난 방문(VISITED) 예약을 COMPLETED 로 바꾼다(beat 30분 주기).
+
+    RESERVED 는 대상이 아니다. 종료 시각이 지나도 RESERVED 로 남고 직원이 방문/노쇼를
+    직접 고른다.
+    """
     db: Session = SessionLocal()
     try:
         # reserved_at 는 UTC-naive 로 저장되므로 비교 기준도 UTC-naive 로 정규화한다.
         now = now_utc().replace(tzinfo=None)
-        unfinished = TreatmentStatus.unfinished_statuses()
+        target_statuses = TreatmentStatus.autocomplete_statuses()
 
         # 끝난 예약이 남지 않도록 배치가 빌 때까지 반복한다(상한 있음).
         for _ in range(MAX_BATCHES_PER_RUN):
@@ -61,8 +71,9 @@ def auto_complete_treatment() -> None:
                 # synchronize_session=False 중요, ORM 상태 추적없이 곧바로 sql 만 실행
                 db.query(Treatment).filter(
                     Treatment.id.in_(complete_ids),
-                    # 조회 이후 취소·노쇼·완료로 바뀐 예약은 덮어쓰지 않는다.
-                    Treatment.status.in_(unfinished),
+                    # 조회 이후 VISITED 가 아니게 된 예약(취소·노쇼·완료·예약으로
+                    # 되돌림)은 덮어쓰지 않는다.
+                    Treatment.status.in_(target_statuses),
                     Treatment.finished_at.is_(None),
                 ).update(
                     {
