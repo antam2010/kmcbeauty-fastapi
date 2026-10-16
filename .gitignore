@@ -1,13 +1,23 @@
 .venv/
 __pycache__/
 *.pyc
+# env 파일은 템플릿(.env.example, .env.prod.example)만 커밋한다. 배포용 env 는 서버에서만
+# 관리한다(SPEC-INFRA-001). .env.local 등 새 변형도 시크릿이 섞이지 않도록 패턴으로 제외.
 .env
-# 배포용 env 는 서버에서만 관리한다 — 템플릿(.env.prod.example)만 커밋 (SPEC-INFRA-001)
-.env.prod
-.env.stage
-.env.dev
+.env.*
+!.env.example
+!.env.prod.example
 logs/*
-celerybeat-schedule
+# Celery beat 스케줄 상태(shelve/dbm — 백엔드에 따라 부가 파일이 생길 수 있다)
+celerybeat-schedule*
+
+# 테스트 · 린트 산출물 (pytest --cov 리포트 등)
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 
 # Firebase 서비스 계정 키 (시크릿, 추적 제외)
 firebase-service-account.json
@@ -20,7 +30,15 @@ firebase-service-account.json
 .moai/learning/
 .moai/evolution/
 .moai/plans/
+.moai/harness/
+.moai/cache/
+.moai/lessons-inbox.jsonl
 
-# Claude Code: 개인 로컬 설정/에이전트 메모리는 제외
-.claude/settings.local.json
+# Claude Code: 개인 로컬 설정(+ .lock)/에이전트 메모리/에이전트 격리 worktree 는 제외
+.claude/settings.local.json*
 .claude/agent-memory/
+.claude/worktrees/
+
+# OS 메타데이터
+.DS_Store
+Thumbs.db
