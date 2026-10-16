@@ -49,7 +49,15 @@ class Settings(BaseSettings):
     # --- 비시크릿 인프라 설정 ---
     # REDIS_URL 은 자격 증명이 없는 내부 오버레이 DNS 이므로 시크릿화하지 않고
     # 이 객체에서 단일 정의한다(REQ-INFRA-103: redis_client/celery_app 이중 정의 통일).
+    # 기본값은 로컬 dev compose 의 서비스 DNS 다. 운영(Swarm)은 .env.prod 에서
+    # 스택 전체 서비스명(redis://kmcbeauty_redis:6379/0)을 지정한다
+    # (공유 네트워크의 다른 `redis` 와 이름 충돌 방지).
     REDIS_URL: str = "redis://redis:6379/0"
+    # rate limit(slowapi/limits) 카운터 저장소. 기본 memory:// 는 프로세스 로컬이라
+    # 로컬 개발·테스트 전용이다(레플리카마다 한도가 따로 적용됨). 운영은 레플리카 간
+    # 카운터를 공유하도록 Redis 를 지정한다
+    # (.env.prod: redis://kmcbeauty_redis:6379/1 — 브로커·캐시의 DB 0 과 분리).
+    RATE_LIMIT_STORAGE_URI: str = "memory://"
     # Firebase 서비스 계정 키 경로. 미설정 시 빈 문자열 → 초기화 스킵(현행 보존).
     FIREBASE_SERVICE_ACCOUNT_KEY_PATH: str = ""
 

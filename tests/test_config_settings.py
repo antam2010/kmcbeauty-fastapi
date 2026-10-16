@@ -115,7 +115,10 @@ def test_redis_url_single_source_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """REQ-INFRA-103: REDIS_URL 이 접근 가능하며 기본값이 내부 오버레이 DNS 다."""
+    """REQ-INFRA-103: REDIS_URL 이 접근 가능하며 기본값은 로컬 compose 서비스 DNS 다.
+
+    운영(Swarm)은 기본값이 아니라 .env.prod 의 redis://kmcbeauty_redis:6379/0 을 쓴다.
+    """
     for key, value in _BASE_ENV.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("REDIS_URL", raising=False)

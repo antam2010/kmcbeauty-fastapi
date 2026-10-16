@@ -12,7 +12,11 @@
 #
 # 환경 변수 (REQ-INFRA-001, env 분리):
 #   - 배포는 `.env.prod` 만 참조한다(로컬용 `.env` 사용 금지).
-#   - 오버레이 안에서 Redis 는 서비스 DNS(`redis://redis:6379/0`)로 해석되어야 한다.
+#   - Redis 는 스택 전체 서비스명 DNS(`redis://kmcbeauty_redis:6379/0`)로 접근한다.
+#     짧은 이름 `redis` 는 공유 네트워크의 다른 컨테이너(구 compose 의 container_name: redis 등)와
+#     겹칠 수 있다. rate limit 저장소도 같은 Redis 의 DB 1 을 쓴다(RATE_LIMIT_STORAGE_URI).
+#   - FORWARDED_ALLOW_IPS(.env.prod)= shared_network_prod 서브넷 CIDR. uvicorn 이 NGINX 의
+#     X-Forwarded-For 를 신뢰해 실제 클라이언트 IP 를 복원한다(rate limit 키). `*` 금지.
 #
 # 시크릿 (REQ-INFRA-002 Firebase + SPEC-INFRA-002 REQ-INFRA-106/107):
 #   - Firebase 서비스 계정 키는 Docker secret(`firebase_service_account`)으로 주입한다.
@@ -30,7 +34,8 @@
 # 네트워킹:
 #   - 어떤 서비스도 호스트 포트를 공개하지 않는다. 외부 NGINX 가 동일한
 #     `shared_network_prod` 오버레이에 붙어 서비스 DNS(kmcbeauty_api:8000)로 라우팅한다.
-#   - Redis/Celery 는 오버레이 내부 전용이다.
+#   - `shared_network_prod` 에는 kmcbeauty_api 만 붙는다. Redis(무인증)/Celery 는 스택 전용
+#     오버레이 `backend`(실제 이름 kmcbeauty_backend)에만 붙어 공유 네트워크에서 보이지 않는다.
 # ==============================================================================
 # (compose spec 기준 `version:` 필드는 obsolete — 최신 docker stack deploy 도 불필요)
 
@@ -60,7 +65,9 @@ services:
       - source: kmc_database_url_v1
         target: DATABASE_URL
     networks:
+      # NGINX 유입용(공유) + Redis 접근용(스택 전용).
       - shared_network_prod
+      - backend
     # 서비스 레벨 헬스체크(REQ-INFRA-004): 롤링 업데이트가 각 새 레플리카의
     # /health 통과를 확인한 뒤 다음 레플리카로 진행하도록 게이팅한다.
     healthcheck:
@@ -97,15 +104,17 @@ services:
           cpus: "0.25"
           memory: 128M
 
-  # --- Redis (broker + app cache) -------------------------------------------
-  # Internal-only. Reachable inside the overlay at:  redis:6379
+  # --- Redis (broker + app cache + rate limit) ------------------------------
+  # Internal-only. Reachable on the backend overlay at:  kmcbeauty_redis:6379
+  # (DB 0 = Celery broker/cache, DB 1 = rate limit counters)
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
     networks:
-      - shared_network_prod
+      # 무인증 Redis 이므로 공유 네트워크(shared_network_prod)에는 붙이지 않는다.
+      - backend
     deploy:
       replicas: 1
       restart_policy:
@@ -144,7 +153,8 @@ services:
       - source: kmc_database_url_v1
         target: DATABASE_URL
     networks:
-      - shared_network_prod
+      # 외부 유입이 없으므로 스택 전용 네트워크만. FCM/DB 이그레스는 오버레이에서 그대로 가능.
+      - backend
     # 이미지 내장 HEALTHCHECK(curl /health)는 웹서버 전용 — celery 프로세스가 상속하면
     # 헬스 실패로 태스크가 kill-loop 되므로 명시적으로 비활성화한다.
     healthcheck:
@@ -191,7 +201,7 @@ services:
       - source: kmc_database_url_v1
         target: DATABASE_URL
     networks:
-      - shared_network_prod
+      - backend
     # 이미지 내장 HEALTHCHECK 상속 방지(웹서버 아님) — worker 와 동일한 이유.
     healthcheck:
       disable: true
@@ -220,8 +230,14 @@ networks:
   # External overlay network shared with the NGINX reverse proxy.
   # Create once (if not present):
   #   docker network create --driver overlay --attachable shared_network_prod
+  # CD 사전 검증이 driver/scope 가 `overlay swarm` 인지 확인한다(bridge 면 배포 중단).
   shared_network_prod:
     external: true
+  # 스택 전용 오버레이(실제 이름 kmcbeauty_backend). api·redis·worker·beat 내부 통신용.
+  # internal: true 로 두지 않는다 — worker/beat 가 FCM(인터넷)·외부 PostgreSQL 로 나가야 한다.
+  # 첫 stack deploy 때 생성되므로, 그 이전에 도는 마이그레이션(deploy_migrate.sh)은 이 망을 쓰지 않는다.
+  backend:
+    driver: overlay
 
 volumes:
   redis_data:
@@ -241,6 +257,7 @@ secrets:
   # 회전: kmc_..._v2 를 만들고 각 서비스의 secrets.source 를 _v2 로 교체(target 불변) 후
   #       docker stack deploy → 롤아웃 완료 후 docker secret rm 구버전. 상세는 docs/deployment.md.
   # 주의: REDIS_URL 은 자격 증명이 없어 시크릿이 아니다 → .env.prod 에 잔류(REQ-INFRA-106).
+  #       Redis 는 backend 전용망에만 있어 스택 밖에서는 접근할 수 없다.
   kmc_secret_key_v1:
     external: true
   kmc_fernet_key_v1:
