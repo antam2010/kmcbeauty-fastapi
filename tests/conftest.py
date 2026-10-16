@@ -6,6 +6,8 @@ app.core.config 는 import 시점에 필수 환경변수를 읽고 int() 캐스�
 
 import os
 
+import pytest
+
 # app.* import 이전에 필수 환경변수를 주입한다.
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-pytest-only")
 os.environ.setdefault("ALGORITHM", "HS256")
@@ -26,3 +28,37 @@ os.environ.setdefault("SENTRY_DSN", "")
 # Fernet 키(url-safe base64 인코딩된 32바이트, 정확히 44자). security.py 가
 # import 시점에 Fernet(FERNET_KEY) 를 생성하므로 유효한 키여야 한다.
 os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
+
+class _InMemoryRedis:
+    """대시보드 캐시가 쓰는 Redis 명령(get/set/delete/incr)의 메모리 구현."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    def set(self, key: str, value: str, ex: int | None = None) -> None:  # noqa: ARG002
+        self.store[key] = value
+
+    def delete(self, *keys: str) -> None:
+        for key in keys:
+            self.store.pop(key, None)
+
+    def incr(self, key: str) -> int:
+        self.store[key] = str(int(self.store.get(key, "0")) + 1)
+        return int(self.store[key])
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dashboard_cache_redis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """예약 쓰기 경로의 대시보드 캐시 무효화가 실제 Redis 에 닿지 않게 한다.
+
+    예약 생성/수정/취소와 자동완료는 커밋 후 캐시 버전을 올린다(INCR). 테스트의
+    REDIS_URL 이 로컬 Redis 를 가리킬 수 있으므로, 단위 테스트가 실제 키를 바꾸지
+    않도록 대시보드 캐시 모듈의 클라이언트를 메모리 구현으로 바꾼다.
+    """
+    from app.utils.redis import dashboard
+
+    monkeypatch.setattr(dashboard, "redis_client", _InMemoryRedis())

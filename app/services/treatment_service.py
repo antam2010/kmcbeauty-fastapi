@@ -26,6 +26,7 @@ from app.schemas.treatment import (
     TreatmentUpdate,
 )
 from app.schemas.treatment_item import TreatmentItemCreate
+from app.utils.redis.dashboard import bump_dashboard_cache_version
 
 DOMAIN = "TREATMENT"
 
@@ -98,6 +99,8 @@ def upsert_treatment_service(
             )
 
         db.commit()
+        # 커밋이 성공한 뒤에만 대시보드 캐시를 무효화한다(실패·롤백 시 호출 안 됨).
+        bump_dashboard_cache_version(current_shop.id)
         db.refresh(treatment)
         return TreatmentSimpleResponse.model_validate(treatment)
 
@@ -150,6 +153,8 @@ def cancel_treatment_service(
     try:
         treatment.status = TreatmentStatus.CANCELLED
         db.commit()
+        # 커밋이 성공한 뒤에만 대시보드 캐시를 무효화한다.
+        bump_dashboard_cache_version(current_shop.id)
     except CustomException:
         db.rollback()
         raise

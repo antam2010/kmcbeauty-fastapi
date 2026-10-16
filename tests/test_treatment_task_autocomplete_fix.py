@@ -85,6 +85,7 @@ def _row(
 ) -> SimpleNamespace:
     return SimpleNamespace(
         treatment_id=treatment_id,
+        shop_id=1,  # 완료 후 상점별 대시보드 캐시 무효화에 쓰인다
         reserved_at=reserved_at,
         total_duration_min=duration,
     )

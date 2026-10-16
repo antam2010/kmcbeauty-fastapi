@@ -26,7 +26,11 @@ from app.schemas.dashboard import (
 )
 from app.utils.redis.dashboard import (
     clear_dashboard_cache,
+    day_period,
     get_dashboard_cache,
+    get_dashboard_cache_key,
+    get_dashboard_cache_version,
+    month_period,
     set_dashboard_cache,
 )
 
@@ -52,13 +56,20 @@ def get_dashboard_summary_service(  # noqa: C901, PLR0915
     )
 
     # ---- 캐시 키 정의 ----
-    t_target_key = ("summary", target_date.isoformat())
-    t_month_key = ("summary", month_start.isoformat())
-    s_target_key = ("sales", target_date.isoformat())
-    s_month_key = ("sales", month_start.isoformat())
-    c_insight_key = ("customer_insight", target_date.isoformat())
-    staff_target_key = ("staff_summary", target_date.isoformat())
-    staff_month_key = ("staff_summary", month_start.isoformat())
+    # 기간 종류(day/month)를 키에 넣는다. 날짜만 쓰면 1일 조회 시 일 키와 월 키
+    # (month_start)가 같아져 월간 통계에 하루치가 섞이거나 그 반대가 된다.
+    # 캐시 버전은 요청당 한 번 읽는다. 예약 쓰기 커밋 후 버전이 오르면 이전 키는
+    # 더 이상 읽히지 않는다(bump_dashboard_cache_version, TTL 로 만료).
+    cache_version = get_dashboard_cache_version(shop.id)
+    day = day_period(target_date)
+    month = month_period(target_date)
+    t_target_key = ("summary", day)
+    t_month_key = ("summary", month)
+    s_target_key = ("sales", day)
+    s_month_key = ("sales", month)
+    c_insight_key = ("customer_insight", day)
+    staff_target_key = ("staff_summary", day)
+    staff_month_key = ("staff_summary", month)
 
     # ---- 유틸: 이터러블/Row/직렬화 보조 ----
     def _is_iterable_but_not_str(x: object) -> bool:
@@ -95,10 +106,11 @@ def get_dashboard_summary_service(  # noqa: C901, PLR0915
         force_refresh: bool = False,
     ) -> list[T] | T:
         field, period = key_tuple
+        cache_key = get_dashboard_cache_key(shop.id, cache_version, field, period)
         if force_refresh:
-            clear_dashboard_cache(shop.id, field, period)
+            clear_dashboard_cache(cache_key)
 
-        cached = get_dashboard_cache(shop.id, field, period)
+        cached = get_dashboard_cache(cache_key)
         if cached is not None and not force_refresh:
             # 캐시 히트: 모델로 복원
             if pydantic_model:
@@ -180,7 +192,7 @@ def get_dashboard_summary_service(  # noqa: C901, PLR0915
 
         # 3) 캐시에 넣기 (항상 직렬화된 형태)
         to_cache = _to_cacheable(result_obj)
-        set_dashboard_cache(shop.id, field, period, to_cache)
+        set_dashboard_cache(cache_key, to_cache)
 
         return result_obj
 

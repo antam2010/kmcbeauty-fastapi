@@ -207,6 +207,8 @@ def get_treatments_to_autocomplete(
     return (
         db.query(
             Treatment.id.label("treatment_id"),
+            # 완료 처리 후 상점별 대시보드 캐시 무효화에 쓴다.
+            Treatment.shop_id,
             Treatment.reserved_at,
             total_duration_min.label("total_duration_min"),
         )
@@ -217,7 +219,7 @@ def get_treatments_to_autocomplete(
             # 시작 전 예약은 끝났을 수 없다(집계 전에 거른다).
             Treatment.reserved_at <= now,
         )
-        .group_by(Treatment.id, Treatment.reserved_at)
+        .group_by(Treatment.id, Treatment.shop_id, Treatment.reserved_at)
         .having(ends_at <= now)
         .order_by(Treatment.reserved_at, Treatment.id)
         .limit(limit)

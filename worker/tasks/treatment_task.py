@@ -13,6 +13,7 @@ from app.exceptions import CustomException
 from app.models.treatment import Treatment
 from app.schemas.treatment import TreatmentAutoComplete
 from app.utils.datetime import now_utc
+from app.utils.redis.dashboard import bump_dashboard_cache_version
 from celery_app import celery_app
 
 DOMAIN = "treatment_task"
@@ -72,6 +73,11 @@ def auto_complete_treatment() -> None:
                 )
 
             db.commit()
+            # 커밋이 성공한 뒤에만, 완료 처리한 예약이 속한 상점의 대시보드 캐시를
+            # 무효화한다(배치마다: 뒤 배치가 실패해도 앞 배치 반영분은 보인다).
+            completed = set(complete_ids)
+            for shop_id in {r.shop_id for r in rows if r.treatment_id in completed}:
+                bump_dashboard_cache_version(shop_id)
 
             # 마지막 배치이거나 진전이 없으면(같은 행 재조회 방지) 멈춘다.
             if len(rows) < AUTOCOMPLETE_BATCH_SIZE or not complete_ids:

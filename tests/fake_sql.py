@@ -135,6 +135,9 @@ class FakeResult:
         # ORM 엔티티 행은 객체 동일성으로 중복 제거된다(Result.unique()).
         return FakeResult(list(dict.fromkeys(self._rows)))
 
+    def scalars(self) -> "FakeResult":
+        return FakeResult([row[0] for row in self._rows])
+
 
 class _FakeQuery(Query):
     """레거시 db.query() 체인. 최종 문을 fake 세션에서 평가한다.
