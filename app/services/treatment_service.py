@@ -254,6 +254,13 @@ def _update_treatment(
 
     for key, value in update_data.items():
         setattr(treatment, key, value)
+
+    # @MX:NOTE: [AUTO] 불변식 — 미완료(RESERVED/VISITED) 예약은 finished_at 이 NULL.
+    #            자동완료된 예약을 직원이 방문/예약으로 되돌리면(정정) 완료 시각을
+    #            지운다. 남겨 두면 자동완료 조회(finished_at IS NULL)가 다시 고르지
+    #            못한다. 클라이언트가 보낸 finished_at 보다 이 불변식이 우선한다.
+    if treatment.status in TreatmentStatus.unfinished_statuses():
+        treatment.finished_at = None
     return treatment
 
 
