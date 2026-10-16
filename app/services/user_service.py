@@ -23,6 +23,7 @@ from app.schemas.user import (
     UserUpdate,
 )
 from app.utils.redis.auth import clear_refresh_token_redis
+from app.utils.redis.user import clear_user_redis
 
 DOMAIN = "USER"
 
@@ -183,7 +184,13 @@ def delete_user_service(
     current_user: User,
     is_soft_delete: bool = False,
 ) -> None:
-    """현재 로그인한 사용자를 삭제합니다."""
+    """현재 로그인한 사용자를 삭제합니다.
+
+    세션 무효화(유저 캐시 · 리프레시 토큰 삭제)는 커밋이 성공한 뒤에만 한다.
+    - 커밋 전에 지우면, 커밋 실패 시 유저는 남았는데 세션만 사라진다.
+    - 유저 캐시를 남기면 캐시에 deleted_at 이 없어 삭제된 유저가 캐시 TTL 동안
+      get_current_user 를 통과한다.
+    """
     user = get_user_by_id(db, current_user.id)
     if not user:
         raise CustomException(
@@ -192,7 +199,8 @@ def delete_user_service(
             hint="없슈.",
         )
 
-    clear_refresh_token_redis(user.id)  # 레디스 캐시 삭제
+    # 삭제·커밋 뒤 만료/분리된 인스턴스를 다시 읽지 않도록 id 를 먼저 보관한다.
+    user_id = user.id
 
     try:
         delete_user_db(
@@ -208,6 +216,11 @@ def delete_user_service(
             domain=DOMAIN,
             exception=e,
         ) from e
+
+    # 커밋이 확정된 뒤에만 세션을 끊는다. 유저 캐시를 먼저 지워 get_current_user 가
+    # 곧바로 DB 폴백(deleted_at 필터)으로 401 을 내게 한다.
+    clear_user_redis(user_id)
+    clear_refresh_token_redis(user_id)
 
 
 def check_user_email_service(db: Session, email: str) -> UserEmailCheckResponse:

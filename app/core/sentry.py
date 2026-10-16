@@ -48,6 +48,8 @@ def init_sentry(
         traces_sample_rate=traces_sample_rate,  # 요청 성능 수집 비율
         profiles_sample_rate=profiles_sample_rate,  # CPU/메모리 프로파일링 비율
         environment=environment,  # 환경 구분(local, debug, prod)
-        send_default_pii=True,  # 개인정보 전송 허용
+        # 개인정보 자동 첨부 차단. True 이면 요청 쿠키(refresh_token 포함) · 인증 헤더 ·
+        # 클라이언트 IP 가 이벤트에 붙고, 기본 스크러버는 "refresh_token" 을 못 지운다.
+        send_default_pii=False,
         before_send=before_send,  # 이벤트 전송 전 처리 함수
     )
