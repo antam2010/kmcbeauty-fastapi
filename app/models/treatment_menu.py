@@ -1,5 +1,5 @@
 from sqlalchemy import Column, ForeignKey, Integer, String, and_
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
 from app.models.base import Base
 from app.models.mixin.soft_delete import SoftDeleteMixin
@@ -23,7 +23,17 @@ class TreatmentMenu(Base, SoftDeleteMixin, TimestampMixin):
     name = Column(String(255), nullable=False, comment="시술 대분류명")
 
     # 관계 정의
-    shop = relationship("Shop", backref="treatment_menus")
+    # Shop.treatment_menus(1:N) 는 backref 로 만든다. delete cascade 가 없으면 샵
+    # 삭제 시 ORM 이 shop_id(NOT NULL)를 NULL 로 UPDATE 해 IntegrityError 가 난다
+    # (소프트삭제 메뉴 포함). FK 가 ON DELETE CASCADE 라 passive_deletes 로 맡긴다.
+    shop = relationship(
+        "Shop",
+        backref=backref(
+            "treatment_menus",
+            cascade="all, delete-orphan",
+            passive_deletes=True,
+        ),
+    )
 
     # @MX:NOTE: [AUTO] soft-delete 인지 관계 — 소프트삭제되지 않은 상세만 로딩한다.
     #            (SPEC-FIX-001 REQ-FIX-003)
@@ -38,6 +48,7 @@ class TreatmentMenu(Base, SoftDeleteMixin, TimestampMixin):
         "TreatmentMenuDetail",
         back_populates="menu",  # 반대편(TreatmentMenuDetail.menu)에서도 이 관계 접근
         cascade="all, delete-orphan",  # 부모 없는 상태면 삭제
+        passive_deletes=True,  # menu_id FK 가 ON DELETE CASCADE(메뉴 삭제 시 DB 처리)
         primaryjoin=lambda: and_(
             TreatmentMenu.id == TreatmentMenuDetail.menu_id,
             TreatmentMenuDetail.deleted_at.is_(None),

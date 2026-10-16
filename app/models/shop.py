@@ -22,11 +22,17 @@ class Shop(Base, SoftDeleteMixin, TimestampMixin):
 
     # 관계 정의
 
+    # @MX:NOTE: [AUTO] 샵 하드 삭제는 DB 연쇄 삭제에 맡긴다. 자식 FK 는 모두
+    #            ON DELETE CASCADE 다. passive_deletes=True 로 자식을 로딩하지 않고
+    #            부모 DELETE 만 내보낸다(행 단위 N+1 삭제 방지). 자식 관계는
+    #            TreatmentMenu.shop 의 backref(treatment_menus)에도 있다.
+
     # Shop → Phonebook (1:N)
     phonebook_list = relationship(
         "Phonebook",
         back_populates="shop",
         cascade="all, delete-orphan",
+        passive_deletes=True,
     )
     # 이 샵의 소유자와의 관계 (N:1)
     owner = relationship("User", back_populates="shops")
@@ -36,7 +42,13 @@ class Shop(Base, SoftDeleteMixin, TimestampMixin):
         "Treatment",
         back_populates="shop",
         cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     # Shop → ShopInvite (1:N)
-    invites = relationship("ShopInvite", back_populates="shop", cascade="all, delete")
+    invites = relationship(
+        "ShopInvite",
+        back_populates="shop",
+        cascade="all, delete",
+        passive_deletes=True,
+    )
