@@ -124,17 +124,23 @@ def get_menu_by_id(
     return query.first()
 
 
+# @MX:NOTE: [AUTO] 테넌트 경계 — 상세 수정/삭제 대상은 현재 샵 메뉴 소속뿐이다.
+#            이전에는 shop_id 를 받고도 무시해 타 샵 상세를 수정/삭제할 수 있었다.
+#            읽기 경로(get_treatment_menu_details_by_user)와 같은 조인/삭제 필터를
+#            써서 읽기와 쓰기의 대상 집합을 일치시킨다.
 def get_menu_detail_by_id(
     db: Session,
     menu_id: int,
     detail_id: int,
-    shop_id: int,  # noqa: ARG001  # 호출부가 shop_id= 키워드로 전달하므로 시그니처를 유지한다
+    shop_id: int,
 ) -> TreatmentMenuDetail | None:
     return (
         db.query(TreatmentMenuDetail)
+        .join(TreatmentMenu, TreatmentMenuDetail.menu_id == TreatmentMenu.id)
         .filter(
             TreatmentMenuDetail.id == detail_id,
             TreatmentMenuDetail.menu_id == menu_id,
+            TreatmentMenu.shop_id == shop_id,
             TreatmentMenuDetail.deleted_at.is_(None),
         )
         .first()

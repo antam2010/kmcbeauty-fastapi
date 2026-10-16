@@ -231,6 +231,24 @@ def create_treatment_menu_detail_service(
             menu_detail.duration_min = filters.duration_min
             menu_detail.base_price = filters.base_price
         else:
+            # 상위 메뉴 소유권 검증: 현재 샵의 삭제되지 않은 메뉴에만 상세를 추가한다.
+            # 타 샵 메뉴/없는 메뉴/삭제된 메뉴를 구분하지 않고 같은 404 를 준다.
+            menu = get_menu_by_id(
+                db=db,
+                menu_id=menu_id,
+                shop_id=current_shop.id,
+                exclude_deleted=True,
+            )
+            if not menu:
+                raise CustomException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    domain=DOMAIN,
+                    hint=(
+                        "시술 메뉴를 찾을 수 없거나 다른 상점의 메뉴이거나 "
+                        "삭제된 메뉴입니다."
+                    ),
+                )
+
             # 시술 메뉴 상세 생성 (CRUD 가 add/flush 까지 수행; 커밋 경계는 서비스 소유)
             # SPEC-FIX-001 REQ-FIX-005: CRUD 내부 db.commit() 을 서비스로 이관.
             menu_detail = create_treatment_menu_detail(
