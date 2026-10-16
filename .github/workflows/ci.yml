@@ -1,9 +1,20 @@
 # ==============================================================================
 # CI 파이프라인 (SPEC-INFRA-001, REQ-INFRA-006 / REQ-INFRA-007)
 #
-# 목적: PR 및 push 에서 코드 품질 게이트를 자동 강제한다.
+# 목적: 코드 품질 게이트를 자동 강제한다.
 #   checkout → Python 3.13(+pip 캐시) → 의존성 설치
 #     → ruff check → ruff format --check → pytest(커버리지 리포트)
+#
+# 트리거:
+#   - pull_request : PR 품질 게이트.
+#   - workflow_call: cd.yml 이 main push 시 빌드·배포 전에 같은 커밋으로 호출한다(배포 게이트).
+#     main push 트리거는 두지 않는다 — CD 가 이미 CI 를 돌리므로 이중 실행이 된다.
+#
+# 동시성(재사용 워크플로 주의):
+#   - 호출될 때 github 컨텍스트는 호출자 것이다(github.workflow == "CD", event_name == push).
+#   - 그룹에 github.workflow 를 넣어 PR 실행(ci-CI-<ref>)과 CD 내부 실행(ci-CD-<ref>)을 분리한다.
+#     호출자 CD 의 그룹(production-deploy)과도 달라 교착/상호 취소가 없다.
+#   - 취소는 PR 에서만 한다. CD 안의 CI 가 취소되면 그 커밋의 빌드·배포가 건너뛰어진다.
 #
 # Redis 서비스 컨테이너를 두지 않는 이유:
 #   현재 테스트 스위트는 DB/Redis/외부 연동을 모두 모킹하므로(tests/conftest.py 는
@@ -16,17 +27,15 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]  # PR 이 주 게이트 — push 이중 실행 방지
+  workflow_call:
 
-# GITHUB_TOKEN 최소 권한 (읽기 전용)
+# GITHUB_TOKEN 최소 권한 (읽기 전용). 호출될 때도 호출자 권한에서 더 낮출 수만 있다.
 permissions:
   contents: read
 
-# 동일 브랜치의 이전 실행은 취소해 러너 낭비를 줄인다.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   quality:

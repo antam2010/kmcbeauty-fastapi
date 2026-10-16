@@ -19,6 +19,10 @@
 #     를 import 하므로 DATABASE_URL 뿐 아니라 필수 필드(SECRET_KEY/FERNET_KEY)도
 #     시크릿으로 마운트하고, 비시크릿(ALGORITHM/토큰 만료)은 `-e` 로 전달한다.
 #   - 태스크 종료 코드를 확인해 성공(0)일 때만 스택 배포로 진행한다(fail-fast).
+#   - 멀티 노드 대비: 매니저 노드에 고정(--constraint node.role==manager — CD 가 이미지를 pull 하고
+#     pg_hba 에 등록된 노드)하고, --with-registry-auth 로 GHCR 자격 증명을 태스크에 전달한다.
+#   - 네트워크는 shared_network_prod(외부 PostgreSQL 이그레스용)를 쓴다. 스택 전용 backend 망은
+#     첫 stack deploy 때 생성되므로 그 이전에 도는 마이그레이션에서는 쓸 수 없다.
 #
 # 실행 방식(택1):
 #   1) 매니저 노드에서 배포용 이미지로 일회성 Swarm 서비스(권장):
@@ -44,7 +48,8 @@ MODE="${1:-container}"
 if [ "$MODE" = "--local" ]; then
   : "${DATABASE_URL:?DATABASE_URL 환경변수를 설정하세요 (Docker secret 전환 후 .env.prod 에 없음). 예) export DATABASE_URL=postgresql+psycopg://user:pass@host:5432/db}"
   echo "🗃️  [MIGRATE] 로컬 alembic upgrade head 실행..."
-  ENV="${ENV:-prod}" APP_ENV="${APP_ENV:-prod}" alembic upgrade head
+  # ENV=prod 는 alembic/env.py 가 .env.prod 를 고르는 값, APP_ENV 는 앱 허용값(local|debug|stage|production).
+  ENV="${ENV:-prod}" APP_ENV="${APP_ENV:-production}" alembic upgrade head
   echo "✅ [MIGRATE] 로컬 마이그레이션 완료."
   exit 0
 fi
@@ -71,12 +76,14 @@ echo "🗃️  [MIGRATE] 일회성 Swarm 서비스로 alembic upgrade head 실�
 docker service create \
   --name "$MIGRATE_SVC" \
   --restart-condition=none \
+  --with-registry-auth \
+  --constraint node.role==manager \
   --network shared_network_prod \
   --secret source=kmc_database_url_v1,target=DATABASE_URL \
   --secret source=kmc_secret_key_v1,target=SECRET_KEY \
   --secret source=kmc_fernet_key_v1,target=FERNET_KEY \
   -e ENV=prod \
-  -e APP_ENV=prod \
+  -e APP_ENV=production \
   -e ALGORITHM=HS256 \
   -e ACCESS_TOKEN_EXPIRE_SECONDS=900 \
   -e REFRESH_TOKEN_EXPIRE_SECONDS=1209600 \
