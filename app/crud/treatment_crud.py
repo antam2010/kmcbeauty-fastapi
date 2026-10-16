@@ -67,23 +67,33 @@ def stmt_treatment_list(
     if filters.staff_user_id:
         stmt = stmt.where(Treatment.staff_user_id == filters.staff_user_id)
 
-    # 검색 필터
+    # 검색 필터: 예약자 이름·전화번호(전화번호부/직접 입력)와 시술 항목명.
+    # @MX:WARN: [AUTO] 검색 조건에 일대다(treatment_items) JOIN 을 쓰지 말 것.
+    # @MX:REASON: JOIN 은 예약 행을 항목 수만큼 늘려 total 이 부풀고, 컬렉션 joinedload
+    #             + LIMIT 에서 LIMIT 가 중복 행에 걸려 페이지 누락·중복이 생긴다(앱은
+    #             items.length === size 로 다음 페이지를 판정). EXISTS(has/any)는 행을
+    #             늘리지 않는다.
     if filters.search:
         keyword = f"%{filters.search}%"
-        stmt = (
-            stmt.outerjoin(Treatment.phonebook)
-            .outerjoin(Treatment.treatment_items)
-            .outerjoin(TreatmentItem.menu_detail)
-            .where(
-                or_(
-                    # 전화번호부 고객 정보
-                    Phonebook.name.ilike(keyword),
-                    Phonebook.phone_number.ilike(keyword),
-                    # 직접 입력된 고객 정보
-                    Treatment.customer_name.ilike(keyword),
-                    Treatment.customer_phone.ilike(keyword),
+        stmt = stmt.where(
+            or_(
+                # 전화번호부 고객 정보
+                Treatment.phonebook.has(
+                    or_(
+                        Phonebook.name.ilike(keyword),
+                        Phonebook.phone_number.ilike(keyword),
+                    ),
                 ),
-            )
+                # 직접 입력된 고객 정보
+                Treatment.customer_name.ilike(keyword),
+                Treatment.customer_phone.ilike(keyword),
+                # 시술 항목명
+                Treatment.treatment_items.any(
+                    TreatmentItem.menu_detail.has(
+                        TreatmentMenuDetail.name.ilike(keyword),
+                    ),
+                ),
+            ),
         )
 
     # 정렬
@@ -96,7 +106,10 @@ def stmt_treatment_list(
             filters.sort_order if filters.sort_order in {"asc", "desc"} else "desc"
         )
         sort_expr = getattr(sort_column, sort_order)
-        stmt = stmt.order_by(sort_expr())
+        # 정렬 키 동률(같은 reserved_at 등)의 순서는 DB 가 보장하지 않아 OFFSET
+        # 페이지끼리 겹치거나 빠질 수 있으므로 PK 를 같은 방향의 2차 키로 둔다.
+        tie_breaker = getattr(Treatment.id, sort_order)
+        stmt = stmt.order_by(sort_expr(), tie_breaker())
 
     return stmt
 
