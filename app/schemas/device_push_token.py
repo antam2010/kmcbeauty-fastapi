@@ -6,7 +6,6 @@ from app.schemas.mixin.base import BaseResponseModel
 
 
 class DevicePushTokenBase(BaseResponseModel):
-    user_id: int | None = Field(None, description="유저 ID")
     shop_id: int | None = Field(None, description="샵 ID")
     device_id: str | None = Field(None, description="디바이스 고유 ID")
     token: str = Field(..., description="FCM 토큰")
@@ -15,7 +14,12 @@ class DevicePushTokenBase(BaseResponseModel):
 
 
 class DevicePushTokenCreate(DevicePushTokenBase):
-    """디바이스 푸시 토큰 생성 요청 스키마."""
+    """디바이스 푸시 토큰 생성 요청 스키마.
+
+    user_id 는 받지 않는다. 토큰 소유자는 서버가 current_user.id 로 강제한다
+    (IDOR 방지). 구버전 클라이언트가 user_id 를 보내도 거부(422)하지 않고
+    무시한다(pydantic 기본 extra="ignore") — 하위 호환 유지.
+    """
 
 
 class DevicePushTokenUpdate(BaseResponseModel):
@@ -31,6 +35,7 @@ class DevicePushTokenResponse(DevicePushTokenBase):
     """디바이스 푸시 토큰 응답 스키마."""
 
     id: int = Field(..., description="디바이스 푸시 토큰 ID")
+    user_id: int | None = Field(None, description="유저 ID")
 
     model_config: ClassVar[dict] = {
         "from_attributes": True,

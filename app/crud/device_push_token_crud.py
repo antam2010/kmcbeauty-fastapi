@@ -1,16 +1,29 @@
 import logging
 
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.core.limits import USER_DEVICE_TOKENS_MAX
 from app.models.device_push_token import DevicePushToken
+from app.models.shop_user import ShopUser
 
 logger = logging.getLogger(__name__)
 
 
-def get_device_token_by_id(db: Session, token_id: int) -> DevicePushToken | None:
-    """디바이스 푸시 토큰 ID로 조회."""
-    return db.query(DevicePushToken).filter(DevicePushToken.id == token_id).first()
+# 소유권 미검증 단건 조회(get_device_token_by_id)는 두지 않는다. 단건 접근은 항상
+# 소유자 조건을 포함해 조회하여, 타인 토큰은 "없음"(404)으로 보이게 한다
+# (존재 여부 은닉 · shop_crud.get_user_shop_by_id 와 같은 관례).
+def get_user_device_token_by_id(
+    db: Session,
+    user_id: int,
+    token_id: int,
+) -> DevicePushToken | None:
+    """유저가 소유한 디바이스 푸시 토큰을 ID로 조회(타인 토큰은 None)."""
+    return (
+        db.query(DevicePushToken)
+        .filter(DevicePushToken.id == token_id, DevicePushToken.user_id == user_id)
+        .first()
+    )
 
 
 def get_device_tokens_by_user(
@@ -48,8 +61,23 @@ def get_device_tokens_by_shop(
     shop_id: int,
     is_active: bool = True,
 ) -> list[DevicePushToken]:
-    """샵 ID로 디바이스 푸시 토큰 목록 조회."""
-    query = db.query(DevicePushToken).filter(DevicePushToken.shop_id == shop_id)
+    """샵 ID로 디바이스 푸시 토큰 목록 조회 (현재 샵 멤버의 토큰만).
+
+    토큰의 shop_id 는 등록 시점의 값이라 멤버에서 제외된 직원의 토큰에도 남아 있다.
+    shop_user 와 (shop_id, user_id) 로 조인해 지금 멤버인 유저의 토큰만 반환한다.
+    조인 키가 uq_shop_user(shop_id, user_id) 이므로 행이 중복되지 않는다.
+    """
+    query = (
+        db.query(DevicePushToken)
+        .join(
+            ShopUser,
+            and_(
+                ShopUser.shop_id == DevicePushToken.shop_id,
+                ShopUser.user_id == DevicePushToken.user_id,
+            ),
+        )
+        .filter(DevicePushToken.shop_id == shop_id)
+    )
     if is_active:
         query = query.filter(DevicePushToken.is_active == is_active)
     return query.all()
@@ -97,7 +125,7 @@ def deactivate_device_token(
 
 def get_or_create_device_token(  # noqa: PLR0913  # 토큰 레코드 필드가 본질적으로 6개다
     db: Session,
-    user_id: int | None,
+    user_id: int,
     shop_id: int | None,
     device_id: str | None,
     token: str,
@@ -108,7 +136,10 @@ def get_or_create_device_token(  # noqa: PLR0913  # 토큰 레코드 필드가 �
     existing = db.query(DevicePushToken).filter(DevicePushToken.token == token).first()
 
     if existing:
-        # 기존 토큰 업데이트
+        # 기존 토큰 업데이트 — 같은 FCM 토큰(앱 설치 단위)을 마지막으로 등록한 유저가
+        # 소유자가 된다(같은 기기에서 다른 계정으로 로그인한 경우의 인계).
+        # 호출부는 user_id=요청자, shop_id=요청자가 멤버인 샵만 넘기므로
+        # 이 덮어쓰기로 타인 계정·타 샵에 토큰을 심을 수는 없다.
         existing.user_id = user_id
         existing.shop_id = shop_id
         existing.device_id = device_id

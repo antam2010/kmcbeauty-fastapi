@@ -29,10 +29,13 @@ router = APIRouter(prefix="/device-tokens", tags=["디바이스 푸시 토큰"])
     response_model=DevicePushTokenResponse,
     summary="디바이스 푸시 토큰 등록",
     description=(
-        "디바이스의 FCM 토큰을 등록합니다. 이미 존재하는 토큰이면 업데이트합니다."
+        "디바이스의 FCM 토큰을 등록합니다. 이미 존재하는 토큰이면 업데이트합니다. "
+        "토큰 소유자는 항상 로그인 사용자이며(본문 user_id 는 무시), "
+        "shop_id 는 사용자가 멤버인 샵만 지정할 수 있습니다."
     ),
     status_code=status.HTTP_201_CREATED,
     responses={
+        status.HTTP_403_FORBIDDEN: COMMON_ERROR_RESPONSES[status.HTTP_403_FORBIDDEN],
         status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
         status.HTTP_500_INTERNAL_SERVER_ERROR: COMMON_ERROR_RESPONSES[
             status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -76,10 +79,12 @@ def get_my_device_tokens(
     "/{token_id}",
     response_model=DevicePushTokenResponse,
     summary="디바이스 토큰 수정",
-    description="디바이스 푸시 토큰 정보를 수정합니다.",
+    description=(
+        "디바이스 푸시 토큰 정보를 수정합니다. 본인 토큰만 대상이며, "
+        "다른 사용자의 토큰은 404 로 응답합니다."
+    ),
     status_code=status.HTTP_200_OK,
     responses={
-        status.HTTP_403_FORBIDDEN: COMMON_ERROR_RESPONSES[status.HTTP_403_FORBIDDEN],
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
         status.HTTP_500_INTERNAL_SERVER_ERROR: COMMON_ERROR_RESPONSES[
             status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -104,10 +109,12 @@ def update_device_token(
 @router.delete(
     "/{token_id}",
     summary="디바이스 토큰 삭제",
-    description="디바이스 푸시 토큰을 삭제합니다.",
+    description=(
+        "디바이스 푸시 토큰을 삭제합니다. 본인 토큰만 대상이며, "
+        "다른 사용자의 토큰은 404 로 응답합니다."
+    ),
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
-        status.HTTP_403_FORBIDDEN: COMMON_ERROR_RESPONSES[status.HTTP_403_FORBIDDEN],
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
         status.HTTP_500_INTERNAL_SERVER_ERROR: COMMON_ERROR_RESPONSES[
             status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -131,12 +138,17 @@ def delete_device_token(
     "/send-fcm",
     response_model=FCMMessageResponse,
     summary="FCM 푸시 알림 전송",
-    description="특정 유저 또는 샵의 디바이스에 FCM 푸시 알림을 전송합니다.",
+    description=(
+        "특정 유저 또는 샵의 디바이스에 FCM 푸시 알림을 전송합니다. "
+        "같은 샵 멤버에게만 보낼 수 있습니다: user_id 는 본인이거나 샵을 공유하는 "
+        "유저, shop_id 는 본인이 멤버인 샵(현재 멤버의 디바이스로만 전송)."
+    ),
     status_code=status.HTTP_200_OK,
     responses={
         status.HTTP_400_BAD_REQUEST: COMMON_ERROR_RESPONSES[
             status.HTTP_400_BAD_REQUEST
         ],
+        status.HTTP_403_FORBIDDEN: COMMON_ERROR_RESPONSES[status.HTTP_403_FORBIDDEN],
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
         status.HTTP_500_INTERNAL_SERVER_ERROR: COMMON_ERROR_RESPONSES[
             status.HTTP_500_INTERNAL_SERVER_ERROR

@@ -1,6 +1,6 @@
 import logging
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.core.limits import SHOP_USERS_MAX
 from app.models.shop_user import ShopUser
@@ -21,6 +21,31 @@ def get_shop_user(db: Session, shop_id: int, user_id: int) -> ShopUser:
 
     """
     return db.query(ShopUser).filter_by(shop_id=shop_id, user_id=user_id).first()
+
+
+def users_share_shop(db: Session, user_id: int, other_user_id: int) -> bool:
+    """두 유저가 최소 하나의 샵 멤버십(shop_user)을 공유하는지 여부.
+
+    shop_user 를 shop_id 로 자기조인해 두 유저의 매핑이 같은 샵에 있는지 본다.
+    유저 대상 푸시 전송 인가(같은 샵 멤버끼리만)에 사용한다.
+
+    Args:
+        db (Session): Database session.
+        user_id (int): 기준 유저 ID(요청자).
+        other_user_id (int): 상대 유저 ID(대상).
+
+    Returns:
+        bool: 공유 샵이 하나라도 있으면 True.
+
+    """
+    peer = aliased(ShopUser, name="peer")
+    shared = (
+        db.query(ShopUser.id)
+        .join(peer, peer.shop_id == ShopUser.shop_id)
+        .filter(ShopUser.user_id == user_id, peer.user_id == other_user_id)
+        .first()
+    )
+    return shared is not None
 
 
 def create_shop_user(db: Session, shop_user_data: ShopUser) -> ShopUser:
