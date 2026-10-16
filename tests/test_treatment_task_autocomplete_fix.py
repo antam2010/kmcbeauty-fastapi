@@ -7,6 +7,8 @@
 - reserved_at(UTC-naive) 과 비교 기준(UTC-naive) 정합 → 9시간 오판정 없음 (AC-004-4)
 
 DB/Celery 의존을 fake 로 대체하고, .update() 에 전달된 완료 대상 ID 집합을 관찰한다.
+조회 함수는 판정 기준 시각(now)을 함께 받고, UPDATE 는 id 조건 뒤에 미완료 재검사
+조건을 더 건다(SQL 판정·배치 루프는 test_treatment_autocomplete_batch_fix.py).
 """
 
 from datetime import UTC, datetime, timedelta
@@ -23,8 +25,8 @@ class FakeUpdateQuery:
     def __init__(self, recorder: dict) -> None:
         self._recorder = recorder
 
-    def filter(self, criterion: object) -> "FakeUpdateQuery":
-        # Treatment.id.in_(complete_ids) 표현식에서 우변 리터럴(ID 목록)을 추출한다.
+    def filter(self, criterion: object, *_rechecks: object) -> "FakeUpdateQuery":
+        # 첫 조건 Treatment.id.in_(complete_ids) 의 우변 리터럴(ID 목록)을 추출한다.
         try:
             self._recorder["ids"] = list(criterion.right.value)
         except AttributeError:
@@ -103,7 +105,7 @@ def test_only_elapsed_treatments_completed(
     monkeypatch.setattr(
         treatment_task,
         "get_treatments_to_autocomplete",
-        lambda _db: rows,
+        lambda _db, _now: rows,
     )
 
     treatment_task.auto_complete_treatment()
@@ -125,7 +127,7 @@ def test_none_duration_does_not_crash_and_is_skipped(
     monkeypatch.setattr(
         treatment_task,
         "get_treatments_to_autocomplete",
-        lambda _db: rows,
+        lambda _db, _now: rows,
     )
 
     # float(None) 크래시가 나면 CustomException(500) 으로 감싸지므로
@@ -151,7 +153,7 @@ def test_utc_naive_comparison_no_9h_skew(
     monkeypatch.setattr(
         treatment_task,
         "get_treatments_to_autocomplete",
-        lambda _db: rows,
+        lambda _db, _now: rows,
     )
 
     treatment_task.auto_complete_treatment()

@@ -1,6 +1,8 @@
+from datetime import datetime, timedelta
+
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import paginate
-from sqlalchemy import func, or_, select
+from sqlalchemy import Interval, func, literal, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.enum.treatment_status import TreatmentStatus
@@ -10,6 +12,7 @@ from app.models.treatment_item import TreatmentItem
 from app.models.treatment_menu import TreatmentMenu
 from app.models.treatment_menu_detail import TreatmentMenuDetail
 from app.schemas.treatment import TreatmentAutoComplete, TreatmentFilter
+from app.utils.datetime import now_utc
 from app.utils.query import apply_date_range_filter
 
 
@@ -175,21 +178,48 @@ def get_treatment_items_by_treatment_id(
     )
 
 
+# 자동완료 1회 조회(배치) 크기.
+AUTOCOMPLETE_BATCH_SIZE = 100
+
+
+# @MX:NOTE: [AUTO] 자동완료 대상 판정은 SQL 에서 한다(종료 시각 = reserved_at +
+#            항목 소요시간 합 <= now). 시간 조건 없이 LIMIT 만 걸면 미래 예약이 배치를
+#            채워 이미 끝난 예약이 영영 완료되지 않는다(실매출 = COMPLETED 과소 집계).
+#            항목 없는 예약은 내부 조인으로 제외된다(자동완료 대상 아님, 기존 정책).
 def get_treatments_to_autocomplete(
     db: Session,
+    now: datetime | None = None,
+    *,
+    limit: int = AUTOCOMPLETE_BATCH_SIZE,
 ) -> list[TreatmentAutoComplete]:
+    """종료 시각이 now 이하인 미완료 예약을 오래된 순으로 최대 limit 건 반환한다.
+
+    :param now: 판정 기준 시각. reserved_at 저장 규약과 같은 UTC naive 이며 기본값은
+        현재 시각이다.
+    """
+    if now is None:
+        now = now_utc().replace(tzinfo=None)
+    total_duration_min = func.sum(TreatmentItem.duration_min)
+    ends_at = Treatment.reserved_at + total_duration_min * literal(
+        timedelta(minutes=1),
+        Interval,
+    )
     return (
         db.query(
             Treatment.id.label("treatment_id"),
             Treatment.reserved_at,
-            func.sum(TreatmentItem.duration_min).label("total_duration_min"),
+            total_duration_min.label("total_duration_min"),
         )
         .join(TreatmentItem, TreatmentItem.treatment_id == Treatment.id)
         .filter(
             Treatment.status.in_(TreatmentStatus.unfinished_statuses()),
             Treatment.finished_at.is_(None),
+            # 시작 전 예약은 끝났을 수 없다(집계 전에 거른다).
+            Treatment.reserved_at <= now,
         )
         .group_by(Treatment.id, Treatment.reserved_at)
-        .limit(100)
+        .having(ends_at <= now)
+        .order_by(Treatment.reserved_at, Treatment.id)
+        .limit(limit)
         .all()
     )

@@ -9,9 +9,10 @@ CI 에는 실DB 가 없다. CRUD 가 만든 실제 문(statement)을 SQL 의미�
 - FROM: 테이블, INNER / LEFT OUTER JOIN, 서브쿼리(페이지네이션 count 문)
 - WHERE: AND / OR, = != < <= > >=, IN, IS [NOT] NULL (SQL NULL 3값 논리),
   ILIKE, 상관 EXISTS(관계 has()/any())
-- SELECT: 컬럼, 엔티티(select(Model)), CASE, coalesce, GROUP BY
+- SELECT: 컬럼, 엔티티(select(Model)), CASE, coalesce, + / * 산술, GROUP BY, HAVING
 - 집계: count(*), count(x), count(DISTINCT x), sum(x)
 - ORDER BY(ASC/DESC, PG 기본 NULL 순서), LIMIT / OFFSET
+- 레거시 db.query(...) 체인(all/first)과 Query.update(), commit/rollback/close 기록
 
 joinedload 같은 로더 옵션은 떼고 평가한다. ORM 은 컬렉션 eager load 에 LIMIT 가
 붙으면 원래 문을 서브쿼리로 감싸 LIMIT 를 먼저 적용하고 eager JOIN 은 바깥에 붙인다.
@@ -31,6 +32,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.orm import Query
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.elements import (
     BinaryExpression,
@@ -54,15 +56,6 @@ Context = dict[str, Any]
 TieOrder = Callable[[int, list[Context]], list[Context]]
 
 _AGGREGATES = frozenset({"count", "sum"})
-
-_COMPARISONS: dict[Callable[[Any, Any], Any], Callable[[Any, Any], bool]] = {
-    operators.eq: operator.eq,
-    operators.ne: operator.ne,
-    operators.lt: operator.lt,
-    operators.le: operator.le,
-    operators.gt: operator.gt,
-    operators.ge: operator.ge,
-}
 
 
 def _normalize(value: object) -> object:
@@ -99,6 +92,22 @@ def _ilike(value: str, pattern: str) -> bool:
     return re.fullmatch(regex, value, re.IGNORECASE | re.DOTALL) is not None
 
 
+# 피연산자가 모두 NULL 이 아닐 때의 이항 연산. 산술은 시각 + 소요시간(interval)
+# 계산용이다(datetime + timedelta, int * timedelta).
+_BINARY_OPERATORS: dict[Callable[[Any, Any], Any], Callable[[Any, Any], Any]] = {
+    operators.eq: operator.eq,
+    operators.ne: operator.ne,
+    operators.lt: operator.lt,
+    operators.le: operator.le,
+    operators.gt: operator.gt,
+    operators.ge: operator.ge,
+    operators.in_op: lambda left, right: left in right,
+    operators.ilike_op: _ilike,
+    operators.add: operator.add,
+    operators.mul: operator.mul,
+}
+
+
 def _without_loader_options(stmt: Select) -> Select:
     """로더 옵션(joinedload 등)을 뗀 사본을 만든다(명시적 FROM/JOIN 만 남는다)."""
     if not stmt._with_options:  # noqa: SLF001  # 옵션 제거용 공개 API 없음
@@ -125,6 +134,43 @@ class FakeResult:
         return FakeResult(list(dict.fromkeys(self._rows)))
 
 
+class _FakeQuery(Query):
+    """레거시 db.query() 체인. 최종 문을 fake 세션에서 평가한다.
+
+    Query 는 generative 복사 때 __dict__ 를 복제하므로 fake_db 가 체인 끝까지 전달된다.
+    """
+
+    fake_db: "FakeSQLSession"
+
+    def all(self) -> list:
+        return self.fake_db.execute(self.statement).all()
+
+    def first(self) -> object | None:
+        rows = self.limit(1).all()
+        return rows[0] if rows else None
+
+    def update(
+        self,
+        values: dict,
+        synchronize_session: object = None,  # noqa: ARG002  # Query.update 시그니처
+        update_args: dict | None = None,  # noqa: ARG002
+    ) -> int:
+        """UPDATE ... WHERE: 조건에 맞는 행만 values 로 바꾸고 건수를 돌려준다."""
+        (desc,) = self.column_descriptions
+        table = desc["entity"].__tablename__
+        where = self.statement.whereclause
+        matched = [
+            row
+            for row in self.fake_db.rows(table)
+            if where is None or self.fake_db.value(where, {table: row}) is True
+        ]
+        for row in matched:
+            for column, value in values.items():
+                setattr(row, getattr(column, "key", column), value)
+        self.fake_db.updates.append([row.id for row in matched])
+        return len(matched)
+
+
 class FakeSQLSession:
     """테이블별 행 목록 위에서 SELECT 문을 평가하는 DB-free 세션."""
 
@@ -134,9 +180,18 @@ class FakeSQLSession:
             self.tables[row.__tablename__].append(row)
         self.statements: list[Select] = []
         self.tie_order = tie_order
+        self.updates: list[list[int]] = []  # Query.update() 가 바꾼 행 id(호출별)
+        self.commit_count = 0
+        self.rollback_count = 0
+        self.closed = False
 
     def rows(self, table_name: str) -> list:
         return list(self.tables[table_name])
+
+    def query(self, *entities: object) -> _FakeQuery:
+        query = _FakeQuery(entities)
+        query.fake_db = self
+        return query
 
     def execute(self, stmt: Select) -> FakeResult:
         self.statements.append(stmt)
@@ -146,21 +201,33 @@ class FakeSQLSession:
         rows = self.execute(stmt).all()
         return rows[0][0] if rows else None
 
+    def commit(self) -> None:
+        self.commit_count += 1
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
+
+    def close(self) -> None:
+        self.closed = True
+
     # ------------------------------------------------------------------ SELECT
 
     def select(self, stmt: Select, execution: int = 0) -> list:
         contexts = self._from_where(stmt, {})
         if self.tie_order is not None:
             contexts = self.tie_order(execution, contexts)
-        if stmt._having_criteria:  # noqa: SLF001
-            msg = "fake 미지원 구문: HAVING"
-            raise AssertionError(msg)
         columns = list(stmt.selected_columns)
         group_by = stmt._group_by_clauses  # noqa: SLF001  # 공개 접근자 없음
-        if group_by or any(_has_aggregate(col) for col in columns):
+        having = stmt._having_criteria  # noqa: SLF001
+        if group_by or having or any(_has_aggregate(col) for col in columns):
             units = [
                 (group[0] if group else {}, group)
                 for group in self._groups(contexts, group_by)
+            ]
+            units = [
+                unit
+                for unit in units
+                if all(self.value(cond, *unit) is True for cond in having)
             ]
         else:
             units = [(ctx, None) for ctx in contexts]
@@ -311,20 +378,14 @@ class FakeSQLSession:
     ) -> object:
         left = self.value(expr.left, ctx, group)
         right = self.value(expr.right, ctx, group)
-        if expr.operator is operators.is_:
-            return left is right
-        if expr.operator is operators.is_not:
-            return left is not right
+        if expr.operator in {operators.is_, operators.is_not}:
+            return (left is right) == (expr.operator is operators.is_)
+        if expr.operator not in _BINARY_OPERATORS:
+            msg = f"fake 미지원 연산자: {expr.operator}"
+            raise AssertionError(msg)
         if left is None or right is None:
-            return None  # SQL: NULL 과의 비교는 UNKNOWN
-        if expr.operator is operators.in_op:
-            return left in right
-        if expr.operator is operators.ilike_op:
-            return _ilike(left, right)
-        if expr.operator in _COMPARISONS:
-            return _COMPARISONS[expr.operator](left, right)
-        msg = f"fake 미지원 연산자: {expr.operator}"
-        raise AssertionError(msg)
+            return None  # SQL: NULL 과의 비교·연산은 UNKNOWN(NULL)
+        return _BINARY_OPERATORS[expr.operator](left, right)
 
     def _function(
         self,

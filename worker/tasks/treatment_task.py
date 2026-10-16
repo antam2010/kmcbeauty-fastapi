@@ -1,56 +1,81 @@
-from datetime import timedelta
+from datetime import datetime
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from app.crud.treatment_crud import get_treatments_to_autocomplete
+from app.crud.treatment_crud import (
+    AUTOCOMPLETE_BATCH_SIZE,
+    get_treatments_to_autocomplete,
+)
 from app.database import SessionLocal
+from app.enum.treatment_status import TreatmentStatus
 from app.exceptions import CustomException
 from app.models.treatment import Treatment
+from app.schemas.treatment import TreatmentAutoComplete
 from app.utils.datetime import now_utc
 from celery_app import celery_app
 
 DOMAIN = "treatment_task"
 
+# 실행 1회당 최대 배치 수(무한 루프 방지 상한). 배치 100건 x 50 = 실행당 최대
+# 5,000건(beat 30분 주기)이며, 남은 대상은 다음 실행이 이어서 처리한다.
+MAX_BATCHES_PER_RUN = 50
 
-# @MX:WARN: [AUTO] 자동완료 판정은 타임존/NULL 경계에 민감하다.
+
+def _is_elapsed(row: TreatmentAutoComplete, now: datetime) -> bool:
+    """종료 시각(reserved_at + 소요시간 합)이 now 이하인지 확인한다.
+
+    SQL 이 이미 거른 행이지만 잘못 조회된 행이 먼저 완료되지 않도록 한 번 더 본다.
+    datetime + timedelta 는 큰 소요시간에서 OverflowError 를 내 배치 전체를 실패시키므로
+    경과 초와 소요 초를 숫자로 비교한다. 항목 없는 시술(None)은 건너뛴다.
+    """
+    if row.total_duration_min is None:
+        return False
+    elapsed_seconds = (now - row.reserved_at).total_seconds()
+    return elapsed_seconds >= float(row.total_duration_min) * 60
+
+
+# @MX:WARN: [AUTO] 자동완료 판정은 타임존/NULL/동시성 경계에 민감하다.
 # @MX:REASON: (1) reserved_at 는 naive DateTime 컬럼이며 저장 규약이 UTC(앱이 UTC ISO
 #             전송, 서버 TimestampMixin/SoftDeleteMixin 모두 UTC 사용)이므로 비교 기준을
 #             반드시 UTC-naive 로 맞춰야 한다. 이전 now_kst().replace(tzinfo=None) 는
 #             KST-naive 로 9시간 어긋나 오판정을 유발했다(SPEC-FIX-001 REQ-FIX-004).
-#             (2) 항목 없는 시술은 total_duration_min(SUM)이 None 이라 float(None)
-#             크래시 위험이 있으므로 None 은 건너뛴다.
+#             (2) 항목 없는 시술은 total_duration_min(SUM)이 None 이라 건너뛴다.
+#             (3) 조회와 UPDATE 사이에 취소·노쇼 처리된 예약을 덮어쓰지 않도록
+#             UPDATE 가 미완료 조건을 다시 확인한다.
 @celery_app.task
 def auto_complete_treatment() -> None:
     db: Session = SessionLocal()
     try:
         # reserved_at 는 UTC-naive 로 저장되므로 비교 기준도 UTC-naive 로 정규화한다.
         now = now_utc().replace(tzinfo=None)
+        unfinished = TreatmentStatus.unfinished_statuses()
 
-        rows = get_treatments_to_autocomplete(db)
+        # 끝난 예약이 남지 않도록 배치가 빌 때까지 반복한다(상한 있음).
+        for _ in range(MAX_BATCHES_PER_RUN):
+            rows = get_treatments_to_autocomplete(db, now)
+            complete_ids = [row.treatment_id for row in rows if _is_elapsed(row, now)]
 
-        # 완료 대상만 필터링.
-        # total_duration_min 이 None(항목 없는 시술)이면 종료 시각을 계산할 수
-        # 없으므로 크래시 없이 건너뛴다(COALESCE 대신 스킵 — 항목 없는 예약은
-        # 자동완료 대상 아님).
-        complete_ids = [
-            row.treatment_id
-            for row in rows
-            if row.total_duration_min is not None
-            and now
-            >= row.reserved_at + timedelta(minutes=float(row.total_duration_min))
-        ]
+            if complete_ids:
+                # synchronize_session=False 중요, ORM 상태 추적없이 곧바로 sql 만 실행
+                db.query(Treatment).filter(
+                    Treatment.id.in_(complete_ids),
+                    # 조회 이후 취소·노쇼·완료로 바뀐 예약은 덮어쓰지 않는다.
+                    Treatment.status.in_(unfinished),
+                    Treatment.finished_at.is_(None),
+                ).update(
+                    {
+                        Treatment.status: "COMPLETED",
+                        Treatment.finished_at: now,
+                    },
+                    synchronize_session=False,
+                )
 
-        if complete_ids:
-            db.query(Treatment).filter(Treatment.id.in_(complete_ids)).update(
-                {
-                    Treatment.status: "COMPLETED",
-                    Treatment.finished_at: now,
-                },
-                synchronize_session=False,  # 중요, ORM 상태 추적없이 곧바로 sql 만 실행
-            )
+            db.commit()
 
-        db.commit()
+            # 마지막 배치이거나 진전이 없으면(같은 행 재조회 방지) 멈춘다.
+            if len(rows) < AUTOCOMPLETE_BATCH_SIZE or not complete_ids:
+                break
     except SQLAlchemyError as e:
         db.rollback()
         raise CustomException(
