@@ -1,1 +1,0 @@
-- [Native API client topology](project_native_api_client_topology.md) — kmcbeauty-native: client.ts is the sole live axios client post-REFACTOR-001; live services in src/api/services/*, live API types via src/types/unified.ts

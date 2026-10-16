@@ -1,6 +1,0 @@
-- [Bash Execution Denied](env-bash-denied.md) — Bash tool is denied in this env; cannot run pytest/ruff, must report commands for user to run
-- [FastAPI Project Layout](project-fastapi-layout.md) — kmcbeauty_fastapi structure, config-at-import env var requirement, tests/ + conftest env-injection pattern
-- [Soft-delete scope for Treatment](project-soft-delete-treatment.md) — Treatment/TreatmentItem/ShopUser have NO SoftDeleteMixin; delete = status→CANCELLED or hard-delete, never add deleted_at in API-001
-- [Invite expire_in unit](project-invite-expire-unit.md) — ShopInviteCreateRequest.expire_in is SECONDS (timedelta(seconds=...)); its "분 단위" description is wrong
-- [Argon2 Password Migration](security-argon2-migration.md) — argon2id default + bcrypt verify-only + rehash-on-login; keep bcrypt/passlib pins
-- [Unbounded list caps](project-unbounded-list-caps.md) — PERF-004 defensive .limit() caps in app/core/limits.py for 4 list[...] endpoints; array shape preserved
