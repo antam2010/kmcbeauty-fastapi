@@ -30,8 +30,11 @@ docker node ls        # 매니저에서 노드 2개(Ready/Active) 확인
 사전 요구:
 
 - 두 노드 간 방화벽 개방: 2377/tcp(클러스터 관리), 7946/tcp+udp(노드 통신), 4789/udp(오버레이 VXLAN)
-- 두 노드 모두 GHCR pull 로그인 구성(`docker login ghcr.io`) — 그렇지 않으면 해당 노드에서
-  이미지 pull 이 실패해 태스크가 스케줄되지 못한다.
+- GHCR pull 자격 증명: CD 는 `docker stack deploy --with-registry-auth` 로 매니저의 GHCR 자격 증명을
+  워커 노드 태스크에 전달한다. 수동 배포도 같은 플래그를 쓰지 않으면 워커 노드에서 이미지 pull 이
+  실패해 태스크가 스케줄되지 못한다(워커 노드에 `docker login ghcr.io` 를 해 두면 플래그 없이도 동작).
+- PostgreSQL `pg_hba.conf` 에 워커 노드 IP 도 허용한다(api/worker 태스크가 워커 노드에서 접속).
+  마이그레이션 일회성 서비스는 매니저 노드에 고정된다(`--constraint node.role==manager`).
 - `shared_network_prod` 오버레이는 매니저에서 생성되어 있으면 클러스터 전체에서 사용 가능.
 
 ---
@@ -84,10 +87,23 @@ docker node update --label-add role=data <NODE-1>
   아니라 서비스 DNS(VIP) 하나만 업스트림으로 두면 된다.
 
   ```nginx
-  upstream kmcbeauty_api {
-      server kmcbeauty_api:8000;   # 오버레이 VIP — Swarm 이 레플리카로 분산
+  # Docker 내장 DNS 를 요청 시점에 사용한다. 고정 upstream 블록은 기동·리로드 때 이름을 해석하므로
+  # 스택이 없으면 공유 NGINX 전체가 실패한다(변수 방식은 이 location 만 502).
+  resolver 127.0.0.11 valid=10s ipv6=off;
+
+  location / {
+      set $kmcbeauty_api http://kmcbeauty_api:8000;   # 오버레이 VIP — Swarm 이 레플리카로 분산
+      proxy_pass $kmcbeauty_api;
+      proxy_set_header Host $host;
+      # 앱(uvicorn)은 FORWARDED_ALLOW_IPS(= shared_network_prod 서브넷)에서 온 이 헤더만 신뢰해
+      # 실제 클라이언트 IP 를 복원한다(로그인 rate limit 키). docs/deployment.md 1절 참조.
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
   }
   ```
+
+- 노드를 늘려도 클라이언트 IP 복원 조건은 같다. NGINX 가 `shared_network_prod` 에서 접속하는 한
+  출발 IP 는 그 서브넷 안에 있으므로 FORWARDED_ALLOW_IPS 를 바꿀 필요가 없다.
 
 - NGINX 자체가 오버레이 밖(호스트)에 있다면, `docker network connect shared_network_prod <nginx-container>`
   로 오버레이에 붙이거나, NGINX 를 스택 서비스로 편입해 동일 오버레이에서 서비스 DNS 를 해석하게 한다.
@@ -100,7 +116,8 @@ docker node update --label-add role=data <NODE-1>
 ## 4. 확장 전 체크리스트
 
 - [ ] 두 노드 방화벽 포트(2377/7946/4789) 개방
-- [ ] 두 노드 모두 GHCR pull 로그인 완료
+- [ ] 수동 배포 명령에 `--with-registry-auth` 사용(또는 두 노드 모두 GHCR pull 로그인 완료)
+- [ ] PostgreSQL `pg_hba.conf` 에 워커 노드 IP 허용
 - [ ] `redis`/`celery_beat` 에 placement 제약 적용(또는 Redis 외부화)
 - [ ] `celery_beat` 가 정확히 1개인지 확인(`docker service ps kmcbeauty_celery_beat`)
 - [ ] NGINX 가 오버레이 서비스 DNS(VIP)로 라우팅하는지 확인

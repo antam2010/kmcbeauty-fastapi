@@ -32,8 +32,8 @@ KMCBeauty FastAPI 프로젝트 실행 가이드
 컨테이너 배포는 docker-compose 대신 단일 Swarm 스택(docker-stack.yml)을 사용합니다.
 배포 상세(시크릿/마이그레이션/롤백/CI-CD)는 ``docs/deployment.md`` 를 참조하세요.
 
-배포는 로컬 ``.env`` 가 아니라 ``.env.prod`` 를 사용합니다(REDIS_URL 을 오버레이
-서비스 DNS ``redis://redis:6379/0`` 로 설정). 최초 1회 ``cp .env.prod.example .env.prod``
+배포는 로컬 ``.env`` 가 아니라 ``.env.prod`` 를 사용합니다(REDIS_URL 을 스택 전체
+서비스명 ``redis://kmcbeauty_redis:6379/0`` 로 설정). 최초 1회 ``cp .env.prod.example .env.prod``
 후 실제 값을 채웁니다. 이미지 태그는 가변 ``latest`` 가 아니라 불변 커밋 SHA(IMAGE_TAG)를 사용합니다.
 
 Swarm 배포(단일 노드, 로컬 빌드 이미지)::
