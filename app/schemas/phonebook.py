@@ -22,8 +22,25 @@ class PhoneNumberValidatorMixin:
         return normalize_korean_phone_number(v)
 
 
+# 그룹명 정규화 Mixin: "그룹 없음"은 항상 None(NULL) 으로 저장한다
+class GroupNameNormalizerMixin:
+    @field_validator("group_name", mode="before")
+    @classmethod
+    def normalize_group_name(cls, v: object) -> object:
+        # 앱은 "그룹 없음"을 '' 로 보낸다. ''·공백뿐인 값은 None 으로 바꾸고 실제 이름은
+        # 앞뒤 공백을 지운다. 그래야 "그룹 없음"이 NULL 한 버킷으로만 묶인다.
+        # mode="before" 라 길이 제한(max_length)은 공백을 지운 값에 적용된다.
+        if isinstance(v, str):
+            return v.strip() or None
+        return v
+
+
 # 전화번호부 생성 요청 스키마
-class PhonebookCreate(BaseResponseModel, PhoneNumberValidatorMixin):
+class PhonebookCreate(
+    BaseResponseModel,
+    PhoneNumberValidatorMixin,
+    GroupNameNormalizerMixin,
+):
     group_name: str | None = Field(
         default=None,
         max_length=100,
@@ -35,7 +52,11 @@ class PhonebookCreate(BaseResponseModel, PhoneNumberValidatorMixin):
 
 
 # 전화번호부 수정 요청 스키마
-class PhonebookUpdate(BaseResponseModel, PhoneNumberValidatorMixin):
+class PhonebookUpdate(
+    BaseResponseModel,
+    PhoneNumberValidatorMixin,
+    GroupNameNormalizerMixin,
+):
     group_name: str | None = Field(
         default=None,
         max_length=100,
@@ -69,7 +90,8 @@ class PhonebookFilter(BaseResponseModel):
 
 # 전화번호부 그룹 별 응답
 class PhonebookGroupedByGroupnameResponse(BaseResponseModel):
-    group_name: str = Field(..., description="그룹 이름")
+    # 그룹 없이 저장된 연락처(group_name IS NULL)는 null 버킷 하나로 묶인다.
+    group_name: str | None = Field(..., description="그룹 이름 (그룹 없음은 null)")
     count: int = Field(..., description="전화번호부 개수")
     items: list["PhonebookResponse"] = Field(default=[], description="전화번호부 목록")
     model_config = ConfigDict(from_attributes=True)
