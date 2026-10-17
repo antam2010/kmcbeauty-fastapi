@@ -6,20 +6,28 @@ from pydantic import ConfigDict, Field, field_validator
 from app.schemas.mixin.base import BaseResponseModel
 from app.utils.phone import is_valid_korean_phone_number, normalize_korean_phone_number
 
+INVALID_PHONE_MESSAGE = "유효하지 않은 전화번호입니다."
+
+
+# 전화번호 검증 + 정규화의 단일 지점. 생성 · 수정 스키마(PhoneNumberValidatorMixin)와
+# 중복 확인 쿼리(GET /phonebooks/check-duplicate)가 같은 규칙을 쓴다.
+def validate_korean_phone_number(v: str) -> str:
+    """유효한 한국 전화번호면 정규형(000-0000-0000)을 돌려주고, 아니면 ValueError."""
+    if not is_valid_korean_phone_number(v):
+        raise ValueError(INVALID_PHONE_MESSAGE)
+    return normalize_korean_phone_number(v)
+
 
 # 전화번호 유효성 검사 + 포맷 통일 Mixin
 class PhoneNumberValidatorMixin:
-    INVALID_PHONE_MESSAGE = "유효하지 않은 전화번호입니다."
+    INVALID_PHONE_MESSAGE = INVALID_PHONE_MESSAGE
 
     @field_validator("phone_number")
     @classmethod
     def validate_phone(cls, v: str | None) -> str | None:
         if v is None:
             return None
-        if not is_valid_korean_phone_number(v):
-            message = cls.INVALID_PHONE_MESSAGE
-            raise ValueError(message)
-        return normalize_korean_phone_number(v)
+        return validate_korean_phone_number(v)
 
 
 # 그룹명 정규화 Mixin: "그룹 없음"은 항상 None(NULL) 으로 저장한다

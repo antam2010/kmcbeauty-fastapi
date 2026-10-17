@@ -12,6 +12,9 @@ class ShopPhoneValidatorMixin:
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str | None) -> str | None:
+        # null 은 전화번호 없음이다(생략과 같다). 정규화에 넘기면 AttributeError(500).
+        if v is None:
+            return None
         if v and not is_valid_korean_phone_number(v):
             msg = "유효하지 않은 전화번호입니다."
             raise ValueError(msg)

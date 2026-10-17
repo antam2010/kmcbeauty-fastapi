@@ -140,6 +140,15 @@ def update_device_token_service(
         return DevicePushTokenResponse.model_validate(updated_token)
     except CustomException:
         raise
+    except IntegrityError as e:
+        # token 은 UNIQUE 다. 다른 행이 쓰는 토큰으로 바꾸면 등록과 같은 409 다.
+        db.rollback()
+        raise CustomException(
+            status_code=status.HTTP_409_CONFLICT,
+            domain=DOMAIN,
+            detail="Token already exists",
+            exception=e,
+        ) from e
     except SQLAlchemyError as e:
         db.rollback()
         raise CustomException(

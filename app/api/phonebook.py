@@ -1,5 +1,8 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, Query, status
 from fastapi_pagination import Page
+from pydantic import AfterValidator
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -13,6 +16,7 @@ from app.schemas.phonebook import (
     PhonebookGroupedByGroupnameResponse,
     PhonebookResponse,
     PhonebookUpdate,
+    validate_korean_phone_number,
 )
 from app.services.phonebook_service import (
     check_duplicate_phone_number_service,
@@ -76,7 +80,14 @@ def list_groups_by_group_name(
     description="이미 전화번호부에 등록된 번호인지 확인합니다.",
 )
 def check_duplicate_phone_number(
-    phone_number: str = Query(..., description="확인할 전화번호"),
+    # 생성 경로(PhonebookCreate)와 같은 규칙(20자 · 검증 · 정규화)을 조회 전에 적용한다.
+    # 잘못된 번호는 422, 01012345678 처럼 정규화 전 번호도 저장된 정규형으로 찾는다.
+    # `= Query(...)` 기본값 방식은 AfterValidator 를 적용하지 않아 Annotated 로 쓴다.
+    phone_number: Annotated[
+        str,
+        Query(max_length=20, description="확인할 전화번호"),
+        AfterValidator(validate_korean_phone_number),
+    ],
     db: Session = Depends(get_db),
     current_shop: Shop = Depends(get_current_shop),
 ) -> DuplicateCheckResponse:

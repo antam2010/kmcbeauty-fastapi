@@ -311,7 +311,8 @@ def check_duplicate_phone_number_service(
     Args:
         db: 데이터베이스 세션
         current_shop: 현재 접속한 매장 정보
-        phone_number: 중복 체크할 전화번호
+        phone_number: 중복 체크할 전화번호. 라우터가 생성 경로와 같은 규칙으로 검증 ·
+            정규화한 값(000-0000-0000)이라 저장값과 그대로 비교한다.
 
     Returns:
         DuplicateCheckResponse: 중복 여부 및 정규화된 전화번호

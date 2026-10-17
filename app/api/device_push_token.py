@@ -82,11 +82,13 @@ def get_my_device_tokens(
     summary="디바이스 토큰 수정",
     description=(
         "디바이스 푸시 토큰 정보를 수정합니다. 본인 토큰만 대상이며, "
-        "다른 사용자의 토큰은 404 로 응답합니다."
+        "다른 사용자의 토큰은 404 로 응답합니다. "
+        "이미 등록된 토큰 문자열로 바꾸면 409 로 응답합니다."
     ),
     status_code=status.HTTP_200_OK,
     responses={
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
+        status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
         status.HTTP_500_INTERNAL_SERVER_ERROR: COMMON_ERROR_RESPONSES[
             status.HTTP_500_INTERNAL_SERVER_ERROR
         ],

@@ -25,7 +25,7 @@ from app.schemas.treatment import (
     TreatmentSimpleResponse,
     TreatmentUpdate,
 )
-from app.schemas.treatment_item import TreatmentItemCreate
+from app.schemas.treatment_item import TreatmentItemCreate, TreatmentItemUpdate
 from app.utils.redis.dashboard import bump_dashboard_cache_version
 
 DOMAIN = "TREATMENT"
@@ -264,19 +264,40 @@ def _update_treatment(
     return treatment
 
 
-def _upsert_treatment_items(
-    db: Session,
-    treatment_id: int,
-    shop_id: int,
-    items: list[TreatmentItemCreate],
-) -> None:
-    existing_items = get_treatment_items_by_treatment_id(db, treatment_id)
-    existing_items_map = {item.id: item for item in existing_items}
-    received_ids = set()
+# 항목 값 필드. 기존 항목의 None(null · 생략)은 "변경 없음"이고, 새 항목은 INSERT 할
+# 값이 모두 있어야 한다(NOT NULL 컬럼 · 서버 기본값 0/1 로 조용히 저장하지 않는다).
+_ITEM_VALUE_FIELDS = ("base_price", "duration_min", "session_no")
 
+
+def _existing_item(
+    item: TreatmentItemCreate | TreatmentItemUpdate,
+    existing_items_map: dict[int, TreatmentItem],
+) -> TreatmentItem | None:
+    """이 예약의 기존 항목이면 그 행, 새 항목(id 없음 · 이 예약에 없는 id)이면 None."""
+    item_id = getattr(item, "id", None)
+    return existing_items_map.get(item_id) if item_id else None
+
+
+def _missing_new_item_values(missing: list[str]) -> CustomException:
+    return CustomException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        domain=DOMAIN,
+        detail=f"새 시술 항목에 필요한 값이 없습니다: {', '.join(missing)}",
+        hint="id 없는(새) 항목은 base_price · duration_min · session_no 가 필요합니다.",
+    )
+
+
+def _validate_items(
+    db: Session,
+    shop_id: int,
+    items: list[TreatmentItemCreate | TreatmentItemUpdate],
+    existing_items_map: dict[int, TreatmentItem],
+) -> None:
     # 이 예약이 이미 참조 중인 상세 ID 는 신규 참조가 아니다. 이후 소프트삭제되었어도
     # 유지할 수 있다(클라이언트가 수정 시 항목 id 없이 전체를 재전송하는 경우 포함).
-    referenced_detail_ids = {item.menu_detail_id for item in existing_items}
+    referenced_detail_ids = {
+        item.menu_detail_id for item in existing_items_map.values()
+    }
 
     # 쓰기 전에 모든 항목을 검증한다.
     # 샵 소유권은 항상 검사하고, 삭제 상태는 신규 참조만 검사한다.
@@ -288,14 +309,33 @@ def _upsert_treatment_items(
             exclude_deleted=item.menu_detail_id not in referenced_detail_ids,
         ):
             raise _invalid_reference(_INVALID_MENU_DETAIL)
+        if _existing_item(item, existing_items_map) is None:
+            missing = [f for f in _ITEM_VALUE_FIELDS if getattr(item, f) is None]
+            if missing:
+                raise _missing_new_item_values(missing)
+
+
+def _upsert_treatment_items(
+    db: Session,
+    treatment_id: int,
+    shop_id: int,
+    items: list[TreatmentItemCreate | TreatmentItemUpdate],
+) -> None:
+    existing_items = get_treatment_items_by_treatment_id(db, treatment_id)
+    existing_items_map = {item.id: item for item in existing_items}
+    received_ids = set()
+
+    _validate_items(db, shop_id, items, existing_items_map)
 
     for item in items:
-        if getattr(item, "id", None) and item.id in existing_items_map:
-            treatment_item = existing_items_map[item.id]
+        treatment_item = _existing_item(item, existing_items_map)
+        if treatment_item is not None:
             treatment_item.menu_detail_id = item.menu_detail_id
-            treatment_item.base_price = item.base_price
-            treatment_item.duration_min = item.duration_min
-            treatment_item.session_no = item.session_no
+            # null(생략)은 "변경 없음"이다. 그대로 쓰면 NOT NULL 컬럼에 NULL 이라 500.
+            for field in _ITEM_VALUE_FIELDS:
+                value = getattr(item, field)
+                if value is not None:
+                    setattr(treatment_item, field, value)
             received_ids.add(item.id)
         else:
             db.add(
