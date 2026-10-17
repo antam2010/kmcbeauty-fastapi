@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, status
-from fastapi_pagination import Page
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -8,6 +7,7 @@ from app.dependencies.shop import get_current_shop
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
 from app.models.shop import Shop
 from app.models.user import User
+from app.schemas.pagination import Page
 from app.schemas.treatment import (
     TreatmentCreate,
     TreatmentFilter,

@@ -3,7 +3,7 @@ from collections import defaultdict
 
 from fastapi import status
 from fastapi_pagination import Page
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.crud.phonebook_crud import (
@@ -182,7 +182,9 @@ def update_phonebook_service(
     except SQLAlchemyError as e:
         # 데이터베이스 관련 에러 처리
         db.rollback()
-        logging.exception("SQLAlchemyError")
+        # DataError(입력 값 거절)는 CustomException 이 400 · 경고 로그로 처리한다.
+        if not isinstance(e, DataError):
+            logging.exception("SQLAlchemyError")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,

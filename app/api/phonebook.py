@@ -1,7 +1,6 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
-from fastapi_pagination import Page
 from pydantic import AfterValidator
 from sqlalchemy.orm import Session
 
@@ -9,6 +8,7 @@ from app.database import get_db
 from app.dependencies.shop import get_current_shop
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
 from app.models.shop import Shop
+from app.schemas.pagination import Page
 from app.schemas.phonebook import (
     DuplicateCheckResponse,
     PhonebookCreate,

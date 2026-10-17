@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Body, Depends, Request, status
-from fastapi_pagination import Page
 from sqlalchemy.orm import Session
 
 from app.core.rate_limit import limiter
@@ -8,6 +7,7 @@ from app.dependencies.auth import get_current_user
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
 from app.models.shop import Shop
 from app.models.user import User
+from app.schemas.pagination import Page
 from app.schemas.shop import ShopCreate, ShopResponse, ShopSelect, ShopUpdate
 from app.schemas.shop_invite import ShopInviteCreateRequest, ShopInviteResponse
 from app.schemas.shop_user import (

@@ -6,6 +6,7 @@ from fastapi_pagination import add_pagination
 from sentry_sdk import capture_exception
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.exc import DataError
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -25,7 +26,7 @@ from app.core.rate_limit import limiter
 from app.core.sentry import init_sentry
 from app.docs import api_change
 from app.docs.tags_metadata import tags_metadata
-from app.exceptions import CustomException
+from app.exceptions import CustomException, data_error_handler
 
 # 기타
 
@@ -94,6 +95,10 @@ app = FastAPI(
 # Rate limiting (slowapi) 등록: limiter 상태 + 429 예외 핸들러
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 서비스가 감싸지 않은 DataError(목록 검색어의 NUL 문자 등)도 500 이 아니라 400 이다.
+# 서비스가 감싼 경로는 CustomException 이 같은 400 으로 바꾼다(app/exceptions.py).
+app.add_exception_handler(DataError, data_error_handler)
 
 
 # CORS 설정 (Cross-Origin Resource Sharing)

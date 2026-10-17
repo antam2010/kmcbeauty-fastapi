@@ -4,7 +4,7 @@ from typing import ClassVar
 from pydantic import Field, field_validator, model_validator
 
 from app.enum.treatment_status import PaymentMethod, TreatmentStatus
-from app.schemas.limits import PG_INT_MAX
+from app.schemas.limits import FILTER_DATE_MAX, FILTER_DATE_MIN, PG_INT_MAX
 from app.schemas.mixin.base import BaseModel, BaseResponseModel
 from app.schemas.phonebook import PhonebookResponse
 from app.schemas.treatment_item import (
@@ -142,8 +142,19 @@ class TreatmentResponse(TreatmentInDBBase):
 class TreatmentFilter(BaseModel):
     """시술 필터링 스키마."""
 
-    start_date: date | None = Field(None, description="예약 시작일 (YYYY-MM-DD)")
-    end_date: date | None = Field(None, description="예약 종료일 (YYYY-MM-DD)")
+    # 날짜 계산(KST→UTC 경계, 종료일 + 1일)이 넘치지 않는 범위만 받는다(밖은 422).
+    start_date: date | None = Field(
+        None,
+        description="예약 시작일 (YYYY-MM-DD)",
+        ge=FILTER_DATE_MIN,
+        le=FILTER_DATE_MAX,
+    )
+    end_date: date | None = Field(
+        None,
+        description="예약 종료일 (YYYY-MM-DD)",
+        ge=FILTER_DATE_MIN,
+        le=FILTER_DATE_MAX,
+    )
     status: TreatmentStatus | None = Field(
         None,
         description="예약 상태 (예약, 대기, 완료, 취소)",

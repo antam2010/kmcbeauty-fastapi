@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.limits import FILTER_DATE_MAX, FILTER_DATE_MIN
 from app.schemas.mixin.base import BaseResponseModel
 from app.schemas.treatment_item import TreatmentItemBase
 from app.schemas.user import UserBaseResponse
@@ -14,9 +15,12 @@ from app.utils.datetime import now_kst_today
 
 
 class DashboardFilter(BaseModel):
+    # 월초 · 월말(+1일) 계산이 넘치지 않는 범위만 받는다(밖은 422).
     target_date: date = Field(
         default_factory=now_kst_today,
         description="조회 날짜 (YYYY-MM-DD)",
+        ge=FILTER_DATE_MIN,
+        le=FILTER_DATE_MAX,
     )
     force_refresh: bool = Field(
         default=False,

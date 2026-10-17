@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 from fastapi import status
 from fastapi_pagination import Page
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.crud.treatment_menu_crud import (
@@ -97,7 +97,9 @@ def create_treatment_menu_service(
 
     except Exception as e:
         db.rollback()
-        logging.exception("SQLAlchemyError")
+        # DataError(입력 값 거절)는 CustomException 이 400 · 경고 로그로 처리한다.
+        if not isinstance(e, DataError):
+            logging.exception("SQLAlchemyError")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
@@ -267,7 +269,9 @@ def create_treatment_menu_detail_service(
         raise
     except Exception as e:
         db.rollback()
-        logging.exception("SQLAlchemyError")
+        # DataError(입력 값 거절)는 CustomException 이 400 · 경고 로그로 처리한다.
+        if not isinstance(e, DataError):
+            logging.exception("SQLAlchemyError")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
