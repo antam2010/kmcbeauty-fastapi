@@ -256,9 +256,11 @@ def send_fcm_notification_service(
     except CustomException:
         raise
     except Exception as e:
+        # 예외 원문(FCM/Firebase 내부 정보)은 응답 detail 에 싣지 않는다. exception 으로
+        # 넘겨 로그 · Sentry 에만 남긴다(debug 노출 여부는 CustomException 이 정한다).
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
-            detail=f"Failed to send FCM notification: {e!s}",
+            detail="Failed to send FCM notification",
             exception=e,
         ) from e
