@@ -43,6 +43,26 @@ init_sentry(
 )
 
 
+def api_docs_enabled(app_env: str) -> bool:
+    """문서(/docs · /redoc · /openapi.json · /changelog) 노출 여부를 돌려준다.
+
+    production 은 노출하지 않는다(엔드포인트 · 스키마 정찰 차단). local/debug/stage 는
+    기존처럼 노출한다.
+    """
+    return app_env != "production"
+
+
+def api_docs_kwargs(app_env: str) -> dict[str, str | None]:
+    """APP_ENV 에 맞는 FastAPI 문서 경로 인자(None 이면 해당 경로를 만들지 않는다)."""
+    if api_docs_enabled(app_env):
+        return {
+            "docs_url": "/docs",
+            "redoc_url": "/redoc",
+            "openapi_url": "/openapi.json",
+        }
+    return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+
+
 app = FastAPI(
     title="뷰티앱",
     description=(
@@ -66,8 +86,7 @@ app = FastAPI(
         "- `{DOMAIN}` 값은 각 API 설명 옆에 명시되어 있습니다."
     ),
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    **api_docs_kwargs(settings.APP_ENV),
     debug=settings.APP_ENV == "debug",
     openapi_tags=tags_metadata,
 )
@@ -141,7 +160,9 @@ app.include_router(treatment_menu.router)
 app.include_router(shop.router)
 app.include_router(summary.router)
 app.include_router(device_push_token.router)
-app.include_router(api_change.router)
+# API 변경 이력(/changelog)도 문서라 production 에서는 등록하지 않는다.
+if api_docs_enabled(settings.APP_ENV):
+    app.include_router(api_change.router)
 
 # FastAPI Pagination 설정
 add_pagination(app)
