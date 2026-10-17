@@ -132,6 +132,25 @@ def generate_refresh_token(user: User) -> str:
     )
 
 
+def _refresh_token_user_id(payload: dict) -> int:
+    """디코딩한 리프레시 토큰 클레임에서 user_id 를 꺼낸다.
+
+    재발급에는 리프레시 토큰(type=refresh)만 쓴다. 액세스 토큰도 같은 키로 서명되므로
+    type 을 봐야 한다(Redis 대조 앞단의 심층 방어).
+
+    :raises ValueError: type 이 refresh 가 아니거나 sub 클레임이 없거나 정수가 아닐 때
+    :raises TypeError: sub 클레임을 정수로 바꿀 수 없는 타입일 때
+    """
+    if payload.get("type") != "refresh":
+        msg = "token type is not refresh"
+        raise ValueError(msg)
+    sub = payload.get("sub")
+    if sub is None:
+        msg = "sub claim missing"
+        raise ValueError(msg)
+    return int(sub)
+
+
 # @MX:ANCHOR: [AUTO] 토큰 재발급/회전 경계 — 세션 무효화·만료 처리의 단일 진입점
 # @MX:REASON: 인증 핵심 경로. Redis 저장 토큰과 클라이언트 토큰의 정합성 및 만료 토큰
 #             재사용 금지 불변식을 보장해야 함 (SPEC-SECURITY-001 REQ-SEC-001/002).
@@ -144,7 +163,7 @@ def refresh_access_token(db: Session, request: Request) -> tuple[str, str]:
     - request: FastAPI Request 객체
     - db: SQLAlchemy 세션 객체
     - 반환값: (액세스 토큰, 리프레시 토큰)
-    - 예외: 리프레시 토큰이 없거나 유효하지 않은 경우
+    - 예외: 리프레시 토큰이 없거나 유효하지 않은 경우(type=refresh 가 아닌 토큰 포함)
     """
     raw_token = request.headers.get("X-Refresh-Token") or request.cookies.get(
         "refresh_token",
@@ -162,14 +181,10 @@ def refresh_access_token(db: Session, request: Request) -> tuple[str, str]:
             settings.SECRET_KEY,
             algorithms=[settings.ALGORITHM],
         )
-        sub = payload.get("sub")
-        if sub is None:
-            msg = "sub claim missing"
-            raise ValueError(msg)
-        user_id = int(sub)
+        user_id = _refresh_token_user_id(payload)
     except (ValueError, TypeError) as e:
-        # sub 클레임이 없거나 정수로 변환할 수 없으면 크래시(500) 대신
-        # 무효 토큰으로 처리하여 401을 반환한다. (AC-001-1 엣지)
+        # 리프레시 토큰이 아니거나(type), sub 클레임이 없거나 정수로 변환할 수 없으면
+        # 크래시(500) 대신 무효 토큰으로 처리하여 401을 반환한다. (AC-001-1 엣지)
         raise CustomException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             domain=DOMAIN,

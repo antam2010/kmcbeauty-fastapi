@@ -100,11 +100,9 @@ def logout(request: Request) -> JSONResponse:
     result = logout_user(token)
     response = JSONResponse(
         status_code=status.HTTP_200_OK,
-        content={
-            "message": "로그아웃 성공",
-            "token": token,
-            "result": result,
-        },
+        # 리프레시 토큰은 응답 본문에 되돌려주지 않는다(로그 · 프록시 · 클라이언트
+        # 저장소 노출 방지). 앱은 로그아웃 응답 본문을 쓰지 않는다.
+        content={"message": "로그아웃 성공", "result": result},
     )
     response.delete_cookie("refresh_token", path="/")
     return response

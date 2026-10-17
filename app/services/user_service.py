@@ -149,19 +149,25 @@ def update_user_service(
         if not user or user.is_deleted():
             raise CustomException(status_code=status.HTTP_404_NOT_FOUND, domain=DOMAIN)
 
+        # 커밋 뒤 만료된 인스턴스를 다시 읽지 않도록 id 를 먼저 보관한다.
+        user_id = user.id
         user_data = user_update.model_dump(exclude_unset=True)
 
         # 비밀번호 해시 처리
         if user_data.get("password"):
             user_data["password"] = hash_password(user_data["password"])
 
-        # 레디스 캐시 삭제
-        clear_refresh_token_redis(user.id)
-
         # 사용자 정보 업데이트 (CRUD 는 setattr 까지만; 커밋 경계는 서비스가 소유)
         # SPEC-FIX-001 REQ-FIX-005: update_user_db 내부 db.commit() 을 서비스로 이관.
         updated_user = update_user_db(db, user, user_data)
         db.commit()
+
+        # 세션 · 캐시 정리는 커밋이 확정된 뒤에만 한다(실패 · 롤백 시 그대로 둔다).
+        # - 리프레시 토큰: 기존처럼 정보를 수정하면 항상 폐기한다.
+        # - 유저 캐시: 남기면 바뀐 role/email/name 이 캐시 TTL(24h) 동안 옛 값이다.
+        clear_refresh_token_redis(user_id)
+        clear_user_redis(user_id)
+
         db.refresh(updated_user)
         return UserResponse.model_validate(updated_user)
     except IntegrityError as e:
