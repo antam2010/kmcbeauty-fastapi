@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi_pagination import Page
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import limiter
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
@@ -150,7 +151,10 @@ def delete_selected_shop(
         status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
     },
 )
+# 초대코드 생성 남용 방지: IP 당 분당 10회(slowapi 키 스타일이 url 이라 샵별로 센다)
+@limiter.limit("10/minute")
 def create_invite_link(
+    request: Request,  # noqa: ARG001  # slowapi limiter 가 IP 추출을 위해 request 를 요구한다
     shop_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

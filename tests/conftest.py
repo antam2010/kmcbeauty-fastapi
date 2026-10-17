@@ -28,6 +28,9 @@ os.environ.setdefault("SENTRY_DSN", "")
 # Fernet 키(url-safe base64 인코딩된 32바이트, 정확히 44자). security.py 가
 # import 시점에 Fernet(FERNET_KEY) 를 생성하므로 유효한 키여야 한다.
 os.environ.setdefault("FERNET_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+# rate limit 카운터는 프로세스 메모리에 둔다. .env 가 Redis 를 가리켜도 테스트 요청이
+# 로컬 Redis 카운터를 바꾸지 않고, 아래 픽스처로 테스트마다 비울 수 있다.
+os.environ.setdefault("RATE_LIMIT_STORAGE_URI", "memory://")
 
 
 class _InMemoryRedis:
@@ -62,3 +65,20 @@ def _isolate_dashboard_cache_redis(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.utils.redis import dashboard
 
     monkeypatch.setattr(dashboard, "redis_client", _InMemoryRedis())
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_counters() -> None:
+    """테스트마다 rate limit 카운터를 비운다(테스트 순서 · 요청 수와 무관하게).
+
+    limiter 는 모듈 전역(app.core.rate_limit)이라 TestClient 요청 수가 테스트 사이에
+    누적된다. limiter 는 켠 채로 두고(전용 rate limit 테스트가 429 를 검증) 카운터만
+    리셋한다. 인메모리 저장소만 비운다(외부 Redis 를 가리키면 건드리지 않는다).
+    """
+    from limits.storage import MemoryStorage
+
+    from app.core.rate_limit import limiter
+
+    storage = limiter.limiter.storage
+    if isinstance(storage, MemoryStorage):
+        storage.reset()

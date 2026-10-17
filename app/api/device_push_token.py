@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import limiter
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
@@ -155,7 +156,10 @@ def delete_device_token(
         ],
     },
 )
+# 푸시 스팸 방지: IP 당 분당 10회
+@limiter.limit("10/minute")
 def send_fcm_notification(
+    request: Request,  # noqa: ARG001  # slowapi limiter 가 IP 추출을 위해 request 를 요구한다
     fcm_request: FCMMessageRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

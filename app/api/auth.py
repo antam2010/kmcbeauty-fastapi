@@ -67,6 +67,8 @@ def login(
         status.HTTP_401_UNAUTHORIZED: {"description": "리프레시 토큰이 유효하지 않음"},
     },
 )
+# 리프레시 토큰 대입 · 재발급 남용 방지: IP 당 분당 30회
+@limiter.limit("30/minute")
 def refresh_token_handler(
     request: Request,
     db: Session = Depends(get_db),
