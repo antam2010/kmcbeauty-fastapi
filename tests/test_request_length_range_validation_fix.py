@@ -383,24 +383,24 @@ OVER_LIMIT_CASES = [
     ),
     # 샵 선택
     ("POST", "/shops/selected", {"json": {"shop_id": 2**31}}, ("body", "shop_id")),
-    # 초대코드 만료(초): 60초 이상 30일 이하
+    # 초대코드 만료(초): 60초 이상 30일 이하. 앱처럼 JSON 본문으로 보낸다.
     (
         "POST",
         f"/shops/{SHOP_ID}/invites",
-        {"params": {"expire_in": 59}},
-        ("query", "expire_in"),
+        {"json": {"expire_in": 59}},
+        ("body", "expire_in"),
     ),
     (
         "POST",
         f"/shops/{SHOP_ID}/invites",
-        {"params": {"expire_in": 0}},
-        ("query", "expire_in"),
+        {"json": {"expire_in": 0}},
+        ("body", "expire_in"),
     ),
     (
         "POST",
         f"/shops/{SHOP_ID}/invites",
-        {"params": {"expire_in": 2_592_001}},
-        ("query", "expire_in"),
+        {"json": {"expire_in": 2_592_001}},
+        ("body", "expire_in"),
     ),
 ]
 OVER_LIMIT_IDS = [
@@ -583,7 +583,7 @@ def test_invite_expire_in_boundary_and_app_values_pass(
     """60초와 앱이 보내는 만료 값(1시간~30일)은 그대로 서비스에 전달된다."""
     response = client.post(
         f"/shops/{SHOP_ID}/invites",
-        params={"expire_in": expire_in},
+        json={"expire_in": expire_in},
     )
 
     assert response.status_code == 201, response.text

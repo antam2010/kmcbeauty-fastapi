@@ -24,8 +24,10 @@ class ShopInviteResponse(BaseResponseModel):
     }
 
 
+# POST /shops/{shop_id}/invites 의 JSON 본문. null 은 허용하지 않는다(422). 허용하면
+# 서비스의 timedelta(seconds=None) 가 TypeError(500)다. 생략하면 기본값이다.
 class ShopInviteCreateRequest(BaseModel):
-    expire_in: int | None = Field(
+    expire_in: int = Field(
         default=INVITE_EXPIRE_IN_DEFAULT,
         description="초대코드 만료 기간(초 단위, 60초 이상 30일 이하)",
         ge=INVITE_EXPIRE_IN_MIN,

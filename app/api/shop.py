@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Body, Depends, Request, status
 from fastapi_pagination import Page
 from sqlalchemy.orm import Session
 
@@ -144,7 +144,10 @@ def delete_selected_shop(
     "/{shop_id}/invites",
     response_model=ShopInviteResponse,
     summary="샵 초대코드 생성",
-    description="샵에 초대코드를 생성합니다.",
+    description=(
+        "샵에 초대코드를 생성합니다. 만료 기간은 JSON 본문의 expire_in(초, 60초 이상 "
+        "30일 이하)으로 정하며, 본문이 없거나 {} 이면 7일입니다."
+    ),
     status_code=status.HTTP_201_CREATED,
     responses={
         status.HTTP_403_FORBIDDEN: COMMON_ERROR_RESPONSES[status.HTTP_403_FORBIDDEN],
@@ -158,7 +161,9 @@ def create_invite_link(
     shop_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-    invite_data: ShopInviteCreateRequest = Depends(),
+    # 앱은 {"expire_in": 초} 를 JSON 본문으로 보낸다(쿼리 아님). Depends() 로 받으면
+    # 쿼리로만 읽혀 본문 값이 무시되고 늘 7일이었다. 본문이 없거나 {} 이면 기본값이다.
+    invite_data: ShopInviteCreateRequest = Body(default=ShopInviteCreateRequest()),
 ) -> ShopInviteResponse:
     return generate_invite_code_service(
         db=db,
