@@ -3,6 +3,13 @@ from typing import ClassVar
 
 from pydantic import BaseModel, Field
 
+# 초대코드 만료 기간 범위(초). 앱 선택지(1시간~30일)를 모두 포함한다. 범위가 없으면
+# 0 · 음수(만들자마자 만료된 코드)나 거대값(만료 일시 계산 범위 초과 → 500)이
+# 들어왔다.
+INVITE_EXPIRE_IN_MIN = 60
+INVITE_EXPIRE_IN_MAX = 60 * 60 * 24 * 30
+INVITE_EXPIRE_IN_DEFAULT = 60 * 60 * 24 * 7
+
 
 class ShopInviteResponse(BaseModel):
     shop_id: int
@@ -15,6 +22,8 @@ class ShopInviteResponse(BaseModel):
 
 class ShopInviteCreateRequest(BaseModel):
     expire_in: int | None = Field(
-        default=60 * 60 * 24 * 7,
-        description="초대코드 만료 기간(초 단위)",
+        default=INVITE_EXPIRE_IN_DEFAULT,
+        description="초대코드 만료 기간(초 단위, 60초 이상 30일 이하)",
+        ge=INVITE_EXPIRE_IN_MIN,
+        le=INVITE_EXPIRE_IN_MAX,
     )

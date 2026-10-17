@@ -7,10 +7,19 @@ from app.enum.role import UserRole
 from app.schemas.mixin.base import BaseResponseModel
 from app.utils.email import normalize_email
 
+# users.email 컬럼 길이(String(50)). 넘는 값을 저장하면 PostgreSQL DataError(500)다.
+EMAIL_MAX_LENGTH = 50
+
 # 저장·식별용 이메일 타입: EmailStr 형식 검증 후 소문자 정규형으로 바꾼다.
 # EmailStr 은 도메인만 소문자화하고 로컬 파트 대소문자는 보존하므로, 대소문자를
 # 구분하는 PostgreSQL 에서 대소문자만 다른 중복 가입을 막으려면 정규화가 필요하다.
-NormalizedEmailStr = Annotated[EmailStr, AfterValidator(normalize_email)]
+# 길이 제한은 맨 뒤에 둔다. pydantic 은 EmailStr 같은 함수 스키마의 max_length 를
+# 검증이 끝난 값에 적용하므로(오류 type: too_long), 저장되는 정규형 길이로 센다.
+NormalizedEmailStr = Annotated[
+    EmailStr,
+    AfterValidator(normalize_email),
+    Field(max_length=EMAIL_MAX_LENGTH),
+]
 
 
 class UserBase(BaseResponseModel):

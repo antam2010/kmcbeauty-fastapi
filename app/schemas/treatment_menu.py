@@ -2,14 +2,21 @@ from datetime import datetime
 
 from pydantic import ConfigDict, Field
 
+from app.schemas.limits import PG_INT_MAX
 from app.schemas.mixin.base import BaseResponseModel
 
 
 # 시술 메뉴 상세 생성 요청
 class TreatmentMenuDetailCreate(BaseResponseModel):
     name: str = Field(..., description="시술 메뉴 상세 이름", max_length=255)
-    duration_min: int = Field(..., description="시술 소요 시간(분)", gt=0)
-    base_price: int = Field(..., description="기본 가격", gt=0)
+    # 상한은 DB 컬럼(integer) 범위다(넘으면 INSERT/UPDATE 500).
+    duration_min: int = Field(
+        ...,
+        description="시술 소요 시간(분)",
+        gt=0,
+        le=PG_INT_MAX,
+    )
+    base_price: int = Field(..., description="기본 가격", gt=0, le=PG_INT_MAX)
 
     model_config = ConfigDict(from_attributes=True)
 

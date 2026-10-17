@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import ConfigDict, Field, field_validator
 
+from app.schemas.limits import PG_INT_MAX
 from app.schemas.mixin.base import BaseResponseModel
 from app.utils.phone import is_valid_korean_phone_number, normalize_korean_phone_number
 
@@ -51,4 +52,4 @@ class ShopResponse(ShopBase):
 
 # 샵 선택 요청 파라미터 (버전 1.0)
 class ShopSelect(BaseResponseModel):
-    shop_id: int = Field(..., description="샵 ID")
+    shop_id: int = Field(..., description="샵 ID", ge=1, le=PG_INT_MAX)
