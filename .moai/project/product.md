@@ -6,7 +6,7 @@
 
 ## 제품 목적
 
-KMCBeauty는 뷰티샵(피부관리, 네일, 헤어 등) 사업자가 여러 지점을 단일 플랫폼에서 운영할 수 있도록 설계된 **샵 범위 멀티테넌시** API 서버다. 각 샵은 독립된 사용자 권한 체계를 갖추고, 시술 예약부터 결제·완료 처리까지 전체 라이프사이클을 관리한다.
+KMCBeauty는 뷰티샵(피부관리, 네일, 헤어 등) 사업자가 여러 지점을 단일 플랫폼에서 운영할 수 있도록 설계된 **샵 범위 멀티테넌시** API 서버다. 각 샵은 독립된 멤버 체계를 갖추고, 시술 예약부터 결제·완료 처리까지 전체 라이프사이클을 관리한다.
 
 ---
 
@@ -17,34 +17,42 @@ KMCBeauty는 뷰티샵(피부관리, 네일, 헤어 등) 사업자가 여러 지
 | 계층 | 설명 |
 |------|------|
 | Shop | 최상위 테넌트 단위. 모든 리소스는 Shop에 귀속됨 |
-| ShopUser | Shop에 소속된 사용자 계정 및 역할(Role) |
-| Role 기반 접근 | 샵 내 권한(예: 오너, 직원)으로 API 접근 제어 |
+| ShopUser | Shop 멤버십(대표원장 여부 포함). 샵 데이터 접근의 기준 |
+| 역할 | MASTER(원장 — 샵 생성 가능) / MANAGER(초대 코드로 가입한 직원) |
+
+- 멤버(MASTER·MANAGER 무관)는 예약·고객·시술 메뉴·대시보드를 함께 사용한다.
+- 샵 정보 수정은 생성자만, 초대 코드·직원 관리는 대표원장만 할 수 있다.
+- 멤버십이 해제되면 다음 요청부터 해당 샵에 접근할 수 없다.
 
 ### 시술 라이프사이클
 
 ```
-RESERVED → IN_PROGRESS → COMPLETED
-                ↓
-            CANCELED
+RESERVED ──(직원 방문 처리)──> VISITED ──(시술 종료 후 자동)──> COMPLETED
+    │                                                          ▲
+    ├──> NO_SHOW   (직원 처리)                                  │ 직원이 직접 완료 처리도 가능
+    └──> CANCELLED (예약 취소)
 ```
 
-- **RESERVED**: 고객 예약 완료
-- **IN_PROGRESS**: 시술 진행 중
-- **COMPLETED**: 시술 완료 (자동 완료 포함 — Celery beat 30분 주기)
-- **CANCELED**: 예약 취소
+- **RESERVED**: 예약됨
+- **VISITED**: 방문 처리됨(직원). 시술 종료 시각이 지나면 Celery beat(30분 주기)가 COMPLETED 로 자동 전환
+- **COMPLETED**: 시술 완료. 결제 수단이 카드·현금이면 실매출로 집계
+- **NO_SHOW**: 노쇼 (직원 처리)
+- **CANCELLED**: 예약 취소 (예약은 소프트삭제 대신 상태로 취소)
+
+정책: 처리되지 않은 RESERVED 는 종료 시각이 지나도 자동 완료하지 않는다. 노쇼가 실매출(결제 수단 기본값 CARD)로 잡히는 것을 막기 위해서이며, 직원이 방문/노쇼를 고른다.
 
 ### 주요 기능
 
 | 기능 | 설명 |
 |------|------|
-| 인증 | OAuth2 Password Flow + JWT 액세스/리프레시 토큰 |
+| 인증 | OAuth2 Password Flow + JWT 액세스/리프레시 토큰 (리프레시 회전·재사용 차단) |
 | 시술 메뉴 관리 | 메뉴 및 세부 항목(treatment_menu, treatment_menu_detail) |
-| 고객 전화번호부 | 샵별 고객 연락처 관리(phonebook) |
-| 결제 수단 | 시술 건별 결제 방식 기록 |
-| FCM 푸시 알림 | firebase-admin 연동, 디바이스 토큰 등록 및 알림 발송 |
-| 대시보드 요약 | 샵별 통계·현황 요약 엔드포인트(summary) |
-| 소프트 삭제 | `SoftDeleteMixin` 기반 논리 삭제 (물리 삭제 없음) |
-| 속도 제한 | slowapi + Redis 기반 요청 횟수 제한 |
+| 고객 전화번호부 | 샵별 고객 연락처 관리(phonebook), 그룹별 집계 (그룹 없음은 null 그룹) |
+| 결제 수단 | 시술 건별 결제 방식 기록 (CARD / CASH / UNPAID) |
+| FCM 푸시 알림 | firebase-admin 연동, 디바이스 토큰 등록 및 같은 샵 멤버 대상 발송 |
+| 대시보드 요약 | 샵별 일·월 통계·현황 요약 (Redis 캐시, 예약 변경 시 무효화) |
+| 소프트 삭제 | `SoftDeleteMixin` 기반 논리 삭제 (전화번호부·샵·메뉴·유저). 계정 강제 탈퇴는 하드 삭제(DB ON DELETE 연쇄) |
+| 속도 제한 | slowapi (운영 저장소 Redis) — 로그인 분당 5회 |
 
 ---
 
@@ -52,15 +60,15 @@ RESERVED → IN_PROGRESS → COMPLETED
 
 | 라우터 모듈 | 경로 접두사 | 주요 역할 |
 |------------|-----------|---------|
-| `auth` | `/auth` | 로그인, 토큰 발급/갱신 |
-| `user` | `/users` | 사용자 등록·조회·수정 |
-| `shop` | `/shops` | 샵 생성·조회·수정 |
-| `phonebook` | `/phonebook` | 고객 연락처 CRUD |
-| `treatment` | `/treatments` | 시술 예약·상태 변경 |
-| `treatment_menu` | `/treatment-menus` | 시술 메뉴 관리 |
-| `treatment_menu_detail` | `/treatment-menu-details` | 메뉴 세부 항목 관리 |
-| `device_push_token` | `/device-push-tokens` | FCM 토큰 등록 |
-| `summary` | `/summary` | 대시보드 요약 통계 |
+| `auth` | `/auth` | 로그인, 토큰 재발급(refresh), 로그아웃 |
+| `user` | `/users` | 가입, 내 정보 조회·수정·탈퇴, 이메일 중복 확인 |
+| `shop` | `/shops` | 샵 생성·조회·수정, 샵 선택, 초대 코드, 샵 멤버 관리 |
+| `phonebook` | `/phonebooks` | 고객 연락처 CRUD, 그룹별 집계, 전화번호 중복 확인 |
+| `treatment` | `/treatments` | 시술 예약 CRUD·상태 변경 |
+| `treatment_menu` | `/treatment-menus` | 시술 메뉴 + 세부 항목(`/{menu_id}/details`) 관리 |
+| `device_push_token` | `/device-tokens` | FCM 토큰 등록·관리, 푸시 발송 |
+| `summary` | `/summary` | 대시보드 요약 통계 (`/summary/dashboard`) |
+| `api_change` (app/docs) | `/changelog` | API 변경 이력 |
 
 ---
 
@@ -70,16 +78,25 @@ RESERVED → IN_PROGRESS → COMPLETED
 |------|------|
 | 가용성 | Docker Swarm 2 레플리카, rolling update + 자동 롤백 |
 | 성능 | uvloop + httptools + orjson 적용, Redis 캐싱 |
-| 모니터링 | Sentry SDK (traces_sample_rate 0.2, 로컬/디버그 비활성) |
-| 보안 | argon2 기본 해시 + bcrypt 레거시 지원, Fernet 대칭 암호화 |
-| 데이터 안전성 | 소프트 삭제로 실수 삭제 방지 |
+| 모니터링 | Sentry SDK (traces_sample_rate 0.2, PII 자동 첨부 차단, 로컬/디버그 비활성) |
+| 보안 | argon2 기본 해시 + bcrypt 레거시 지원, Fernet 대칭 암호화, 액세스 토큰 타입 검증, 테넌트 격리(멤버십·교차 참조 검증) |
+| 데이터 안전성 | 소프트 삭제로 실수 삭제 방지, 세션 타임존 UTC 고정 |
 
 ---
 
 ## 알려진 제약사항
 
-- 일부 테스트(5건)가 fastapi-pagination 0.15.15 환경 비호환으로 실패 — SPEC-INFRA-001 이전부터 존재, 별도 정리 필요
-- ruff 기존 lint 부채(~700건) 및 format 미적용 파일(11개)은 SPEC-INFRA-001 범위 밖 — 별도 정리 필요
+- 앱(kmcbeauty-native) 예약 수정 화면에 '방문함(VISITED)' 선택지가 없다. 앱에 추가하기 전까지는 자동 완료가 사실상 동작하지 않으며, 직원이 '완료'를 직접 처리해야 실매출에 잡힌다.
+- 실서버는 아직 구축되지 않았다. 첫 Swarm 배포 절차는 `docs/deployment.md` 10절을 따른다.
+- FK `ON DELETE` 보강 후보: `shop.user_id`, `treatment.phonebook_id`
+- 마지막 대표원장을 보호하는 장치가 없다 (정책 결정 필요).
+- 테스트는 DB 를 모킹하며 CI 에 PostgreSQL 이 없다. PostgreSQL 호환은 로컬 실DB 스모크로 확인한다.
 
 > SPEC-INFRA-001(2026-07-07)으로 해소된 이슈: REDIS_URL localhost 결함, Firebase 시크릿 마운트 누락, `.env.prod` 부재
 > SPEC-INFRA-002(2026-07-07)으로 해소된 이슈: `.env.prod` 평문 시크릿 집중, os.getenv 산개(단일 진실원천 부재), GitHub 시크릿 수기 관리, Docker secret 회전 절차 부재
+> 2026-07 해소: 테스트 실패 5건(fastapi-pagination·pydantic 직렬화), ruff lint 부채(1,146건 → 0건)
+> 2026-10 해소:
+> - MySQL→PostgreSQL 전환 (드라이버·베이스라인·GROUP BY·세션 TZ·이메일 대소문자)
+> - 보안: 교차 테넌트 참조·메뉴 상세·푸시 인가 결함, JWT 타입 미검증·탈퇴 세션 잔존·Sentry PII
+> - 배포: 스크립트 실행 비트, CI 게이트, 배포 직렬화, Redis 망 격리, 프록시 신뢰
+> - 기능: 매니저 샵 접근, 대시보드 캐시 충돌, 집계 단위, 검색 페이지, 자동완료 누락·노쇼 정책, 강제 탈퇴 500
