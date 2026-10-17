@@ -10,6 +10,10 @@ from app.utils.email import normalize_email
 # users.email 컬럼 길이(String(50)). 넘는 값을 저장하면 PostgreSQL DataError(500)다.
 EMAIL_MAX_LENGTH = 50
 
+# 비밀번호 최소 길이(사용자 결정 2026-10-17, 4 → 8). 가입 · 변경에만 적용한다. 로그인
+# (OAuth2PasswordRequestForm)은 길이를 검사하지 않아 기존 짧은 비밀번호 계정도 그대로다.
+PASSWORD_MIN_LENGTH = 8
+
 # 저장·식별용 이메일 타입: EmailStr 형식 검증 후 소문자 정규형으로 바꾼다.
 # EmailStr 은 도메인만 소문자화하고 로컬 파트 대소문자는 보존하므로, 대소문자를
 # 구분하는 PostgreSQL 에서 대소문자만 다른 중복 가입을 막으려면 정규화가 필요하다.
@@ -52,7 +56,11 @@ class UserCreate(UserBase):
     role 을 결정한다(초대 코드 있으면 MANAGER, 없으면 기본값 MASTER).
     """
 
-    password: str = Field(..., min_length=4, description="비밀번호")
+    password: str = Field(
+        ...,
+        min_length=PASSWORD_MIN_LENGTH,
+        description="비밀번호 (8자 이상)",
+    )
     invite_code: str | None = Field(
         None,
         description="초대 코드",
@@ -68,7 +76,11 @@ class UserUpdate(UserBase):
     경로에서만 허용된다(user_crud.update_user_db 화이트리스트로도 이중 차단).
     """
 
-    password: str = Field(None, min_length=4, description="비밀번호")
+    password: str = Field(
+        None,
+        min_length=PASSWORD_MIN_LENGTH,
+        description="비밀번호 (8자 이상, 변경할 때만 보낸다)",
+    )
 
 
 class UserUpdateToken(BaseResponseModel):
