@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.crud.device_push_token_crud import deactivate_device_tokens_by_user
-from app.crud.shop_invite_curd import get_invite_by_code
+from app.crud.shop_invite_curd import delete_invite, get_invite_by_code
 from app.crud.shop_user_crud import ShopUser, create_shop_user
 from app.crud.user_crud import (
     create_user,
@@ -59,6 +59,8 @@ def validate_user_creation(
     """서버가 결정한 role 기준으로 가입 유효성을 검사한다.
 
     role 은 클라이언트 입력이 아니라 resolve_signup_role 로 서버가 결정한 값이다.
+    MANAGER 가입의 초대 행은 잠근다(FOR UPDATE). 잠금은 가입 트랜잭션이 끝날 때까지
+    유지된다.
     """
     if role == UserRole.ADMIN:
         raise CustomException(
@@ -76,7 +78,7 @@ def validate_user_creation(
                 detail="MANAGER 권한은 초대 코드가 필요합니다.",
             )
 
-        invite = get_invite_by_code(db, invite_code)
+        invite = get_invite_by_code(db, invite_code, for_update=True)
         if not invite:
             raise CustomException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -86,6 +88,10 @@ def validate_user_creation(
     return invite
 
 
+# @MX:NOTE: [AUTO] 초대코드는 1회용이다(첫 성공 가입이 소비). 초대 행 잠금(FOR UPDATE)
+#            → 검증 → 유저 + MANAGER 멤버십 생성 → 초대 삭제를 한 트랜잭션으로 커밋한다.
+#            같은 코드의 동시 가입은 잠금에서 기다린 뒤 삭제된 행을 못 찾아 400 이다.
+#            가입이 실패해 롤백되면 삭제도 취소되어 코드가 남는다.
 # 회원 생성
 def create_user_service(db: Session, user_create: UserCreate) -> UserResponse:
     # 권한 상승 방지: role 은 클라이언트가 아니라 서버가 결정한다.
@@ -113,6 +119,8 @@ def create_user_service(db: Session, user_create: UserCreate) -> UserResponse:
                 db,
                 shop_user_data,
             )
+            # 초대코드는 1회용: 가입과 같은 트랜잭션에서 잠근 초대 행을 지운다.
+            delete_invite(db, invite)
 
         db.commit()
         db.refresh(user)

@@ -61,18 +61,34 @@ def delete_invite_by_shop_id(db: Session, shop_id: int) -> None:
     db.flush()
 
 
-def get_invite_by_code(db: Session, invite_code: str) -> ShopInvite | None:
-    """샵 코드로 초대코드 조회.
+def get_invite_by_code(
+    db: Session,
+    invite_code: str,
+    *,
+    for_update: bool = False,
+) -> ShopInvite | None:
+    """샵 코드로 초대코드 조회(만료 전 코드만).
 
     :param db: DB 세션
     :param invite_code: 샵 코드
+    :param for_update: True 면 행을 잠근다(SELECT ... FOR UPDATE). 가입이 코드를
+        소비할 때 같은 코드로 동시에 들어온 가입이 커밋까지 기다리게 한다.
     :return: 초대코드 정보
     """
-    return (
-        db.query(ShopInvite)
-        .filter(
-            ShopInvite.invite_code == invite_code,
-            ShopInvite.expired_at > datetime.now(UTC),
-        )
-        .first()
+    query = db.query(ShopInvite).filter(
+        ShopInvite.invite_code == invite_code,
+        ShopInvite.expired_at > datetime.now(UTC),
     )
+    if for_update:
+        query = query.with_for_update()
+    return query.first()
+
+
+def delete_invite(db: Session, invite: ShopInvite) -> None:
+    """초대코드 한 건을 삭제한다(가입이 소비). 커밋 경계는 서비스가 소유한다.
+
+    :param db: DB 세션
+    :param invite: 삭제할 초대코드(가입 트랜잭션에서 잠근 행)
+    """
+    db.delete(invite)
+    db.flush()
