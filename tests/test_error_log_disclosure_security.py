@@ -164,3 +164,13 @@ def test_scrubber_keeps_default_denylist_and_ignores_key_case(
     headers = event["request"]["headers"]
     assert _filtered(headers["Authorization"])
     assert _filtered(headers["X-Refresh-Token"])
+
+
+def test_sentry_does_not_send_frame_local_variables(sentry_init_kwargs: dict) -> None:
+    """스택 프레임 지역변수를 이벤트에 싣지 않는다(include_local_variables=False).
+
+    기본값(True)이면 auth 경로의 raw_token · new_refresh_token · saved_token 같은
+    지역변수가 그대로 전송된다. 스크러버는 키 이름 정확 일치만 지우므로 이런 변수명을
+    막지 못한다.
+    """
+    assert sentry_init_kwargs["include_local_variables"] is False

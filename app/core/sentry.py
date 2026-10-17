@@ -65,5 +65,8 @@ def init_sentry(
             ],
             recursive=True,
         ),
+        # 스택 프레임 지역변수를 싣지 않는다(기본 True). auth 경로의 raw_token ·
+        # new_refresh_token 같은 변수명은 스크러버의 키 정확 일치로 지워지지 않는다.
+        include_local_variables=False,
         before_send=before_send,  # 이벤트 전송 전 처리 함수
     )
