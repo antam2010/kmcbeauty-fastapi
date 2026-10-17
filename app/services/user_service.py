@@ -3,6 +3,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.crud.device_push_token_crud import deactivate_device_tokens_by_user
 from app.crud.shop_invite_curd import get_invite_by_code
 from app.crud.shop_user_crud import ShopUser, create_shop_user
 from app.crud.user_crud import (
@@ -190,6 +191,9 @@ def delete_user_service(
     - 커밋 전에 지우면, 커밋 실패 시 유저는 남았는데 세션만 사라진다.
     - 유저 캐시를 남기면 캐시에 deleted_at 이 없어 삭제된 유저가 캐시 TTL 동안
       get_current_user 를 통과한다.
+
+    소프트삭제는 디바이스 푸시 토큰을 같은 트랜잭션에서(커밋 전) 비활성화한다.
+    강제 삭제는 device_push_tokens.user_id FK(ON DELETE CASCADE)로 토큰도 지워진다.
     """
     user = get_user_by_id(db, current_user.id)
     if not user:
@@ -208,6 +212,9 @@ def delete_user_service(
             user=user,
             is_soft_delete=is_soft_delete,
         )
+        if is_soft_delete:
+            # 소프트삭제는 토큰 행이 남으므로 탈퇴 유저에게 푸시가 가지 않게 끈다.
+            deactivate_device_tokens_by_user(db, user_id)
         db.commit()
     except SQLAlchemyError as e:
         db.rollback()

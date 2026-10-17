@@ -216,8 +216,17 @@ def delete_events(monkeypatch: pytest.MonkeyPatch) -> list:
     def fake_clear_user(user_id: int) -> None:
         events.append(f"clear_user:{user_id}")
 
+    def fake_deactivate_tokens(_db: object, user_id: int) -> int:
+        events.append(f"deactivate_tokens:{user_id}")
+        return 0
+
     monkeypatch.setattr(user_service, "get_user_by_id", lambda _db, _uid: user)
     monkeypatch.setattr(user_service, "delete_user_db", fake_delete_user_db)
+    monkeypatch.setattr(
+        user_service,
+        "deactivate_device_tokens_by_user",
+        fake_deactivate_tokens,
+    )
     monkeypatch.setattr(user_service, "clear_refresh_token_redis", fake_clear_refresh)
     monkeypatch.setattr(user_service, "clear_user_redis", fake_clear_user)
     return events

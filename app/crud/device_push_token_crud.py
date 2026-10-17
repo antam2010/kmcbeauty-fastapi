@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.core.limits import USER_DEVICE_TOKENS_MAX
 from app.models.device_push_token import DevicePushToken
 from app.models.shop_user import ShopUser
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ def get_device_tokens_by_shop(
     토큰의 shop_id 는 등록 시점의 값이라 멤버에서 제외된 직원의 토큰에도 남아 있다.
     shop_user 와 (shop_id, user_id) 로 조인해 지금 멤버인 유저의 토큰만 반환한다.
     조인 키가 uq_shop_user(shop_id, user_id) 이므로 행이 중복되지 않는다.
+    탈퇴(소프트삭제) 유저는 shop_user 행이 이력으로 남으므로 users 를 조인해 뺀다.
     """
     query = (
         db.query(DevicePushToken)
@@ -76,7 +78,8 @@ def get_device_tokens_by_shop(
                 ShopUser.user_id == DevicePushToken.user_id,
             ),
         )
-        .filter(DevicePushToken.shop_id == shop_id)
+        .join(User, User.id == ShopUser.user_id)
+        .filter(DevicePushToken.shop_id == shop_id, User.deleted_at.is_(None))
     )
     if is_active:
         query = query.filter(DevicePushToken.is_active == is_active)
@@ -121,6 +124,23 @@ def deactivate_device_token(
     device_token.is_active = False
     db.flush()
     return device_token
+
+
+def deactivate_device_tokens_by_user(db: Session, user_id: int) -> int:
+    """유저의 디바이스 푸시 토큰을 모두 비활성화(is_active=False)한다.
+
+    탈퇴(소프트삭제) 트랜잭션 안에서 호출한다. 행을 지우지 않고 UPDATE 한 번으로
+    끈다. 커밋 경계는 서비스가 소유한다(여기서는 commit 하지 않는다).
+
+    Returns:
+        int: 대상이 된 토큰 수.
+
+    """
+    return (
+        db.query(DevicePushToken)
+        .filter(DevicePushToken.user_id == user_id)
+        .update({DevicePushToken.is_active: False})
+    )
 
 
 def get_or_create_device_token(  # noqa: PLR0913  # 토큰 레코드 필드가 본질적으로 6개다

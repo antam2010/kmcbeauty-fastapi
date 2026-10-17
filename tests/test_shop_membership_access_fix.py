@@ -47,6 +47,7 @@ from app.dependencies.shop import get_current_shop
 from app.exceptions import CustomException
 from app.models.shop import Shop
 from app.models.shop_user import ShopUser
+from app.models.user import User
 from app.schemas.shop import ShopUpdate
 from app.services import shop_service, shop_user_service
 
@@ -208,7 +209,13 @@ def _world() -> FakeSession:
         (SHOP_GONE, OWNER.id, 1),
         (SHOP_GONE, MANAGER.id, 0),
     ]
+    # 멤버십 판정(get_shop_user)은 users 를 조인해 탈퇴 유저를 뺀다(활성 유저 행).
+    member_ids = sorted({user_id for _, user_id, _ in links})
     return FakeSession(
+        *(
+            User(id=user_id, email=f"user{user_id}@test.com", name=f"유저{user_id}")
+            for user_id in member_ids
+        ),
         _shop(SHOP_A, OWNER.id),
         _shop(SHOP_GONE, OWNER.id, deleted_at=NOW),  # 소프트삭제된 샵
         _shop(SHOP_B, OUTSIDER.id),

@@ -6,9 +6,10 @@ CI 에는 실DB 가 없다. CRUD 가 만든 실제 문(statement)을 SQL 의미�
 넘기지 않고 AssertionError 로 실패시킨다(평가기 공백이 테스트 통과로 위장되지 않게).
 
 지원 범위:
-- FROM: 테이블, INNER / LEFT OUTER JOIN, 서브쿼리(페이지네이션 count 문)
+- FROM: 테이블, 테이블 별칭(aliased 자기조인), INNER / LEFT OUTER JOIN,
+  서브쿼리(페이지네이션 count 문)
 - WHERE: AND / OR, = != < <= > >=, IN, IS [NOT] NULL (SQL NULL 3값 논리),
-  ILIKE, 상관 EXISTS(관계 has()/any())
+  true / false 상수, ILIKE, 상관 EXISTS(관계 has()/any())
 - SELECT: 컬럼, 엔티티(select(Model)), CASE, coalesce, + / * 산술, GROUP BY, HAVING
 - 집계: count(*), count(x), count(DISTINCT x), sum(x)
 - ORDER BY(ASC/DESC, PG 기본 NULL 순서), LIMIT / OFFSET
@@ -42,14 +43,16 @@ from sqlalchemy.sql.elements import (
     BooleanClauseList,
     Case,
     ColumnClause,
+    False_,
     Grouping,
     Label,
     Null,
+    True_,
     UnaryExpression,
 )
 from sqlalchemy.sql.functions import FunctionElement
 from sqlalchemy.sql.schema import Table
-from sqlalchemy.sql.selectable import Exists, Join, Select, Subquery
+from sqlalchemy.sql.selectable import Alias, Exists, Join, Select, Subquery
 from sqlalchemy.sql.visitors import iterate
 
 # 테이블명 → 행 객체. LEFT OUTER JOIN 에서 짝이 없으면 None.
@@ -65,6 +68,18 @@ def _normalize(value: object) -> object:
     if isinstance(value, datetime) and value.tzinfo is not None:
         return value.astimezone(UTC).replace(tzinfo=None)
     return value
+
+
+def _table_source(from_clause: object) -> tuple[str, str] | None:
+    """테이블/테이블 별칭이면 (행 문맥 키, 실제 테이블명), 그 외에는 None.
+
+    별칭(aliased 자기조인)은 별칭 이름을 문맥 키로 써서 같은 테이블의 행을 따로 묶는다.
+    """
+    if isinstance(from_clause, Table):
+        return from_clause.name, from_clause.name
+    if isinstance(from_clause, Alias) and isinstance(from_clause.element, Table):
+        return from_clause.name, from_clause.element.name
+    return None
 
 
 def _has_aggregate(expr: object) -> bool:
@@ -328,25 +343,27 @@ class FakeSQLSession:
 
     def _expand(self, from_clause: object, ctx: Context) -> list[Context]:
         """FROM 항목 하나를 행 문맥 목록으로 펼친다(JOIN 은 행 곱)."""
-        if isinstance(from_clause, Table):
-            table = from_clause.name
-            return [{**ctx, table: row} for row in self.rows(table)]
+        if source := _table_source(from_clause):
+            key, table = source
+            return [{**ctx, key: row} for row in self.rows(table)]
         if isinstance(from_clause, Subquery):
             # count(*) FROM (서브쿼리) 용: 서브쿼리 행 수만큼 문맥을 만든다.
             name = str(from_clause.name)
             return [{**ctx, name: row} for row in self.select(from_clause.element)]
-        if isinstance(from_clause, Join) and isinstance(from_clause.right, Table):
-            right = from_clause.right.name
+        if isinstance(from_clause, Join) and (
+            source := _table_source(from_clause.right)
+        ):
+            key, table = source
             out = []
             for left_ctx in self._expand(from_clause.left, ctx):
-                candidates = [{**left_ctx, right: row} for row in self.rows(right)]
+                candidates = [{**left_ctx, key: row} for row in self.rows(table)]
                 matched = [
                     joined
                     for joined in candidates
                     if self.value(from_clause.onclause, joined) is True
                 ]
                 if not matched and from_clause.isouter:
-                    matched = [{**left_ctx, right: None}]
+                    matched = [{**left_ctx, key: None}]
                 out.extend(matched)
             return out
         msg = f"fake 미지원 FROM: {from_clause!r}"
@@ -385,6 +402,9 @@ class FakeSQLSession:
             return _normalize(value)
         if isinstance(expr, Null):
             return None
+        if isinstance(expr, (True_, False_)):
+            # Boolean 컬럼을 파이썬 bool 과 비교하면(== True) 바인드 대신 상수가 된다.
+            return isinstance(expr, True_)
         if isinstance(expr, Exists):
             inner = expr.element
             while not isinstance(inner, Select):  # ScalarSelect / Grouping 래퍼
@@ -399,7 +419,8 @@ class FakeSQLSession:
             return _and(values) if expr.operator is operators.and_ else _or(values)
         if isinstance(expr, BinaryExpression):
             return self._binary(expr, ctx, group)
-        if isinstance(expr, ColumnClause) and isinstance(expr.table, Table):
+        if isinstance(expr, ColumnClause) and _table_source(expr.table):
+            # 별칭 컬럼의 table.name 은 별칭 이름이다(_expand 의 문맥 키와 같다).
             row = ctx[expr.table.name]
             return None if row is None else _normalize(getattr(row, expr.key))
         msg = f"fake 미지원 식: {expr!r}"

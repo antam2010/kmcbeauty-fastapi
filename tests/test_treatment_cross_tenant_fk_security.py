@@ -52,6 +52,7 @@ from app.models.treatment import Treatment
 from app.models.treatment_item import TreatmentItem
 from app.models.treatment_menu import TreatmentMenu
 from app.models.treatment_menu_detail import TreatmentMenuDetail
+from app.models.user import User
 from app.schemas.treatment import (
     TreatmentCreate,
     TreatmentSimpleResponse,
@@ -242,6 +243,8 @@ def _world() -> FakeSession:
         ShopUser(id=2, shop_id=SHOP_A, user_id=3, is_primary_owner=0),
         ShopUser(id=3, shop_id=SHOP_B, user_id=2, is_primary_owner=1),
         ShopUser(id=4, shop_id=SHOP_B, user_id=4, is_primary_owner=0),
+        # 멤버십 판정(get_shop_user)은 users 를 조인해 탈퇴 유저를 뺀다(활성 유저 1~4)
+        *(User(id=i, email=f"user{i}@test.com", name=f"유저{i}") for i in range(1, 5)),
         # 고객
         Phonebook(id=100, shop_id=SHOP_A, name="A고객", phone_number="01000000100"),
         Phonebook(
