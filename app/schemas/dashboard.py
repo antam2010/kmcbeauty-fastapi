@@ -2,9 +2,15 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.mixin.base import BaseResponseModel
 from app.schemas.treatment_item import TreatmentItemBase
 from app.schemas.user import UserBaseResponse
 from app.utils.datetime import now_kst_today
+
+# 응답 스키마는 BaseResponseModel 이다. DB 의 naive UTC 일시(reserved_at 등)에 UTC 를
+# 붙여 "...Z" 로 직렬화한다(오프셋이 없으면 앱이 현지 시각으로 읽어 9시간 어긋난다).
+# 서비스는 dict(model_dump)를 돌려주고 FastAPI 가 응답 모델로 다시 검증하므로, 배포 전
+# 캐시에 남은 오프셋 없는 문자열도 응답에서는 UTC 로 나간다.
 
 
 class DashboardFilter(BaseModel):
@@ -18,7 +24,7 @@ class DashboardFilter(BaseModel):
     )
 
 
-class TreatmentSummarySchema(BaseModel):
+class TreatmentSummarySchema(BaseResponseModel):
     total_reservations: int = Field(
         ...,
         description="전체 예약 건수 (조회기간 내)",
@@ -57,7 +63,7 @@ class TreatmentSummarySchema(BaseModel):
     )
 
 
-class TreatmentSalesItem(BaseModel):
+class TreatmentSalesItem(BaseResponseModel):
     menu_detail_id: int = Field(..., description="시술 항목 ID")
     name: str = Field(..., description="시술명")
     count: int = Field(..., description="예약 건수")
@@ -65,7 +71,7 @@ class TreatmentSalesItem(BaseModel):
     actual_price: int = Field(..., description="실제 시술 완료된 금액")
 
 
-class DashboardSalesSummary(BaseModel):
+class DashboardSalesSummary(BaseResponseModel):
     target_date: list[TreatmentSalesItem] = Field(
         ...,
         description="조회 날짜에 시술 항목별 매출/건수 요약",
@@ -76,7 +82,7 @@ class DashboardSalesSummary(BaseModel):
     )
 
 
-class DashboardSummary(BaseModel):
+class DashboardSummary(BaseResponseModel):
     target_date: TreatmentSummarySchema = Field(
         ...,
         description="조회 날짜에 대한 시술 통계",
@@ -87,18 +93,18 @@ class DashboardSummary(BaseModel):
     )
 
 
-class DashboardStaffSummaryItem(BaseModel):
+class DashboardStaffSummaryItem(BaseResponseModel):
     staff_id: int
     staff_name: str
     count: int
 
 
-class DashboardStaffSummary(BaseModel):
+class DashboardStaffSummary(BaseResponseModel):
     target_date: list[DashboardStaffSummaryItem]
     month: list[DashboardStaffSummaryItem]
 
 
-class DashboardCustomerInsight(BaseModel):
+class DashboardCustomerInsight(BaseResponseModel):
     id: int = Field(..., description="예약 ID")
     reserved_at: datetime = Field(..., description="예약 일시")
     customer_name: str | None = Field(None, description="고객 이름")
@@ -127,7 +133,7 @@ class DashboardCustomerInsight(BaseModel):
     total_spent: int = Field(..., description="총 결제 금액")
 
 
-class DashboardSummaryResponse(BaseModel):
+class DashboardSummaryResponse(BaseResponseModel):
     target_date: date = Field(
         default_factory=now_kst_today,
         description="조회 날짜 (YYYY-MM-DD)",
