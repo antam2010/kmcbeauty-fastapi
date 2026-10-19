@@ -1,0 +1,9 @@
+# pre-commit 훅 (SPEC-INFRA-001, REQ-INFRA-013)
+# 사용법: pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format

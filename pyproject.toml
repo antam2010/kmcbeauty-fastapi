@@ -1,6 +1,6 @@
 [tool.ruff]
 line-length = 88
-target-version = "py312"
+target-version = "py313"
 lint.select = [
     "E", "F", "W", "C90", "I", "N", "D", "UP", "YTT", "ANN", "S", "BLE", "B",
     "A", "COM", "C4", "DTZ", "EM", "EXE", "ISC", "ICN", "G", "INP", "PIE",
@@ -20,8 +20,24 @@ lint.ignore = [
     "TRY301",  # try-except에서 bare except 허용
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# 테스트에서 assert 사용은 pytest 관용구이므로 S101 무시 (재작성은 안티패턴).
+# PLC0415: 특성화/보안 테스트는 conftest 의 env 주입·monkeypatch 이후 import 하거나
+# import 시점 부작용 자체를 검증하므로 함수 내부 지연 import 가 load-bearing 이다.
+# 이를 top-level 로 올리면 테스트 격리/검증 대상이 깨지므로 tests 에 한해 무시한다.
+"tests/*" = ["S101", "PLC0415"]
+# alembic 마이그레이션은 파일 경로로 로드되는 의도적 비-패키지이므로
+# __init__.py 를 추가하면 안 된다. 따라서 INP001 을 해당 경로에 한해 무시한다.
+"alembic/env.py" = ["INP001"]
+"alembic/versions/*" = ["INP001"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+

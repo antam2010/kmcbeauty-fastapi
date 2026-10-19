@@ -1,6 +1,6 @@
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql import case
 
@@ -21,6 +21,15 @@ from app.schemas.user import UserBaseResponse
 from app.utils.query import apply_date_range_filter
 
 
+# @MX:NOTE: [AUTO] 집계 단위 규약 — 건수는 예약(treatment) 1건 단위, 금액은 시술 항목
+#            base_price 합이다. 항목(일대다)을 조인하면 예약 행이 항목 수만큼 늘어나므로
+#            건수는 예약 id 를 DISTINCT 로 센다. 항목 없는 예약도 건수에 포함되도록
+#            LEFT JOIN 하고 금액은 0 으로 본다.
+def _item_price() -> ColumnElement[int]:
+    """LEFT JOIN 결과의 항목 금액(항목 없는 예약은 0)."""
+    return func.coalesce(TreatmentItem.base_price, 0)
+
+
 def get_treatment_summary(
     db: Session,
     shop_id: int,
@@ -39,19 +48,20 @@ def get_treatment_summary(
             Treatment.status,
             Treatment.payment_method,
             func.count(func.distinct(Treatment.id)).label("count"),
-            func.sum(TreatmentItem.base_price).label("total_price"),
+            func.sum(_item_price()).label("total_price"),
             func.sum(
                 case(
                     # case 구문에서 unpaid_methods 리스트 직접 비교
                     (
                         Treatment.payment_method.in_(unpaid_methods),
-                        TreatmentItem.base_price,
+                        _item_price(),
                     ),
                     else_=0,
                 ),
             ).label("unpaid_total"),
         )
-        .join(TreatmentItem, TreatmentItem.treatment_id == Treatment.id)
+        # 항목 없는 예약도 건수에 포함한다(LEFT JOIN, 금액 0).
+        .outerjoin(TreatmentItem, TreatmentItem.treatment_id == Treatment.id)
         .where(Treatment.shop_id == shop_id)
     )
     stmt = apply_date_range_filter(stmt, Treatment.reserved_at, start_date, end_date)
@@ -253,14 +263,14 @@ def get_customer_insight_bulk(
 ) -> dict[int, dict]:
     """고객별 전체 예약수, 노쇼수, 노쇼율, 외상합, 총 결제금액 등 일괄 반환."""
     completed_status = TreatmentStatus.for_actual_sales()
+    is_no_show = Treatment.status == TreatmentStatus.NO_SHOW.value
 
     subq = (
         select(
             Treatment.phonebook_id.label("phonebook_id"),
-            func.count(Treatment.id).label("total_reservations"),
-            func.sum(
-                case((Treatment.status == TreatmentStatus.NO_SHOW.value, 1), else_=0),
-            ).label(
+            # 항목 행마다 세면 항목 수만큼 부풀므로 예약 id 를 DISTINCT 로 센다.
+            func.count(func.distinct(Treatment.id)).label("total_reservations"),
+            func.count(func.distinct(case((is_no_show, Treatment.id)))).label(
                 "no_show_count",
             ),
             func.sum(
@@ -268,7 +278,7 @@ def get_customer_insight_bulk(
                     (
                         (Treatment.status == completed_status)
                         & (Treatment.payment_method == PaymentMethod.UNPAID.value),
-                        TreatmentItem.base_price,
+                        _item_price(),
                     ),
                     else_=0,
                 ),
@@ -278,13 +288,14 @@ def get_customer_insight_bulk(
                     (
                         (Treatment.status == completed_status)
                         & (Treatment.payment_method.in_(PaymentMethod.paid_methods())),
-                        TreatmentItem.base_price,
+                        _item_price(),
                     ),
                     else_=0,
                 ),
             ).label("total_spent"),
         )
-        .join(TreatmentItem, Treatment.id == TreatmentItem.treatment_id)
+        # 항목 없는 예약도 누적 예약수에 포함한다(LEFT JOIN, 금액 0).
+        .outerjoin(TreatmentItem, Treatment.id == TreatmentItem.treatment_id)
         .where(Treatment.shop_id == shop_id)
         .where(Treatment.phonebook_id.in_(phonebook_ids))
         .group_by(Treatment.phonebook_id)
@@ -323,7 +334,8 @@ def get_staff_summary(
         .join(User, Treatment.staff_user_id == User.id)
         .where(Treatment.shop_id == shop_id)
         .where(Treatment.staff_user_id.is_not(None))
-        .group_by(Treatment.staff_user_id)
+        # PostgreSQL 은 비집계 SELECT 컬럼(users.name)이 GROUP BY 에 없으면 거부한다.
+        .group_by(Treatment.staff_user_id, User.name)
     )
     stmt = apply_date_range_filter(
         stmt,

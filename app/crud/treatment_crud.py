@@ -1,14 +1,18 @@
+from datetime import datetime, timedelta
+
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import paginate
-from sqlalchemy import func, or_, select
+from sqlalchemy import Interval, func, literal, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.enum.treatment_status import TreatmentStatus
 from app.models.phonebook import Phonebook
 from app.models.treatment import Treatment
 from app.models.treatment_item import TreatmentItem
+from app.models.treatment_menu import TreatmentMenu
 from app.models.treatment_menu_detail import TreatmentMenuDetail
 from app.schemas.treatment import TreatmentAutoComplete, TreatmentFilter
+from app.utils.datetime import now_utc
 from app.utils.query import apply_date_range_filter
 
 
@@ -66,31 +70,49 @@ def stmt_treatment_list(
     if filters.staff_user_id:
         stmt = stmt.where(Treatment.staff_user_id == filters.staff_user_id)
 
-    # 검색 필터
+    # 검색 필터: 예약자 이름·전화번호(전화번호부/직접 입력)와 시술 항목명.
+    # @MX:WARN: [AUTO] 검색 조건에 일대다(treatment_items) JOIN 을 쓰지 말 것.
+    # @MX:REASON: JOIN 은 예약 행을 항목 수만큼 늘려 total 이 부풀고, 컬렉션 joinedload
+    #             + LIMIT 에서 LIMIT 가 중복 행에 걸려 페이지 누락·중복이 생긴다(앱은
+    #             items.length === size 로 다음 페이지를 판정). EXISTS(has/any)는 행을
+    #             늘리지 않는다.
     if filters.search:
         keyword = f"%{filters.search}%"
-        stmt = (
-            stmt.outerjoin(Treatment.phonebook)
-            .outerjoin(Treatment.treatment_items)
-            .outerjoin(TreatmentItem.menu_detail)
-            .where(
-                or_(
-                    # 전화번호부 고객 정보
-                    Phonebook.name.ilike(keyword),
-                    Phonebook.phone_number.ilike(keyword),
-                    # 직접 입력된 고객 정보
-                    Treatment.customer_name.ilike(keyword),
-                    Treatment.customer_phone.ilike(keyword),
+        stmt = stmt.where(
+            or_(
+                # 전화번호부 고객 정보
+                Treatment.phonebook.has(
+                    or_(
+                        Phonebook.name.ilike(keyword),
+                        Phonebook.phone_number.ilike(keyword),
+                    ),
                 ),
-            )
+                # 직접 입력된 고객 정보
+                Treatment.customer_name.ilike(keyword),
+                Treatment.customer_phone.ilike(keyword),
+                # 시술 항목명
+                Treatment.treatment_items.any(
+                    TreatmentItem.menu_detail.has(
+                        TreatmentMenuDetail.name.ilike(keyword),
+                    ),
+                ),
+            ),
         )
 
     # 정렬
+    # sort_order 는 {asc, desc} 화이트리스트로 명시 검증한다. 무효값(조작된 값)은
+    # getattr(sort_column, sort_order, None)() 로 None 을 호출해 500 크래시가 나므로
+    # 기본값 desc 로 안전하게 대체한다. (SPEC-FIX-001 REQ-FIX-005)
     if filters.sort_by and hasattr(Treatment, filters.sort_by):
         sort_column = getattr(Treatment, filters.sort_by)
-        sort_expr = getattr(sort_column, filters.sort_order, None)
-        if sort_expr:
-            stmt = stmt.order_by(sort_expr())
+        sort_order = (
+            filters.sort_order if filters.sort_order in {"asc", "desc"} else "desc"
+        )
+        sort_expr = getattr(sort_column, sort_order)
+        # 정렬 키 동률(같은 reserved_at 등)의 순서는 DB 가 보장하지 않아 OFFSET
+        # 페이지끼리 겹치거나 빠질 수 있으므로 PK 를 같은 방향의 2차 키로 둔다.
+        tie_breaker = getattr(Treatment.id, sort_order)
+        stmt = stmt.order_by(sort_expr(), tie_breaker())
 
     return stmt
 
@@ -114,11 +136,37 @@ def get_treatment_list(
     return paginate(db, stmt)
 
 
+# @MX:NOTE: [AUTO] 테넌트 경계 — 시술 항목이 참조할 상세는 현재 샵 메뉴 소속뿐이다.
+#            id 단독 조회는 타 샵 상세 참조(교차 테넌트 FK)를 허용했으므로
+#            TreatmentMenu 조인으로 shop_id 를 항상 강제한다. 호출부는 삭제 상태
+#            검사만 끌 수 있다(이미 참조 중인 상세 유지).
 def validate_menu_detail_exists(
     db: Session,
     menu_detail_id: int,
+    shop_id: int,
+    *,
+    exclude_deleted: bool = True,
 ) -> TreatmentMenuDetail | None:
-    return db.query(TreatmentMenuDetail).filter_by(id=menu_detail_id).first()
+    """현재 샵 메뉴에 속한 시술 상세를 조회한다(없거나 타 샵 소속이면 None).
+
+    :param exclude_deleted: True 면 상세와 상위 메뉴가 모두 소프트삭제되지 않은 경우만
+        반환한다(신규 참조). 예약이 이미 참조 중인 상세를 유지할 때는 False 로 호출해
+        샵 소유권만 검증한다.
+    """
+    query = (
+        db.query(TreatmentMenuDetail)
+        .join(TreatmentMenu, TreatmentMenuDetail.menu_id == TreatmentMenu.id)
+        .filter(
+            TreatmentMenuDetail.id == menu_detail_id,
+            TreatmentMenu.shop_id == shop_id,
+        )
+    )
+    if exclude_deleted:
+        query = query.filter(
+            TreatmentMenuDetail.deleted_at.is_(None),
+            TreatmentMenu.deleted_at.is_(None),
+        )
+    return query.first()
 
 
 def get_treatment_items_by_treatment_id(
@@ -130,21 +178,56 @@ def get_treatment_items_by_treatment_id(
     )
 
 
+# 자동완료 1회 조회(배치) 크기.
+AUTOCOMPLETE_BATCH_SIZE = 100
+
+
+# @MX:NOTE: [AUTO] 자동완료 대상 판정은 SQL 에서 한다(상태 = 직원이 방문 처리한
+#            VISITED, 종료 시각 = reserved_at + 항목 소요시간 합 <= now). RESERVED 는
+#            노쇼일 수 있어 대상이 아니다(직원이 방문/노쇼를 고른다). 시간 조건 없이
+#            LIMIT 만 걸면 미래 예약이 배치를 채워 이미 끝난 예약이 영영 완료되지
+#            않는다(실매출 = COMPLETED 과소 집계). 항목 없는 예약은 내부 조인으로
+#            제외된다(자동완료 대상 아님, 기존 정책).
 def get_treatments_to_autocomplete(
     db: Session,
+    now: datetime | None = None,
+    *,
+    limit: int = AUTOCOMPLETE_BATCH_SIZE,
 ) -> list[TreatmentAutoComplete]:
+    """종료 시각이 now 이하인 방문(VISITED) 예약을 오래된 순으로 최대 limit 건 반환한다.
+
+    자동완료 대상은 직원이 방문 처리한 VISITED 뿐이다
+    (TreatmentStatus.autocomplete_statuses). 종료 시각이 지난 RESERVED 는 반환하지
+    않는다. RESERVED 로 남겨 직원이 방문/노쇼를 직접 고르게 한다.
+
+    :param now: 판정 기준 시각. reserved_at 저장 규약과 같은 UTC naive 이며 기본값은
+        현재 시각이다.
+    """
+    if now is None:
+        now = now_utc().replace(tzinfo=None)
+    total_duration_min = func.sum(TreatmentItem.duration_min)
+    ends_at = Treatment.reserved_at + total_duration_min * literal(
+        timedelta(minutes=1),
+        Interval,
+    )
     return (
         db.query(
             Treatment.id.label("treatment_id"),
+            # 완료 처리 후 상점별 대시보드 캐시 무효화에 쓴다.
+            Treatment.shop_id,
             Treatment.reserved_at,
-            func.sum(TreatmentItem.duration_min).label("total_duration_min"),
+            total_duration_min.label("total_duration_min"),
         )
         .join(TreatmentItem, TreatmentItem.treatment_id == Treatment.id)
         .filter(
-            Treatment.status.in_(TreatmentStatus.unfinished_statuses()),
+            Treatment.status.in_(TreatmentStatus.autocomplete_statuses()),
             Treatment.finished_at.is_(None),
+            # 시작 전 예약은 끝났을 수 없다(집계 전에 거른다).
+            Treatment.reserved_at <= now,
         )
-        .group_by(Treatment.id, Treatment.reserved_at)
-        .limit(100)
+        .group_by(Treatment.id, Treatment.shop_id, Treatment.reserved_at)
+        .having(ends_at <= now)
+        .order_by(Treatment.reserved_at, Treatment.id)
+        .limit(limit)
         .all()
     )

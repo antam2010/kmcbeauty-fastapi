@@ -1,6 +1,6 @@
 from typing import ClassVar
 
-from sqlalchemy import Column, ForeignKey, Integer, SmallInteger
+from sqlalchemy import Column, ForeignKey, Index, Integer, SmallInteger
 from sqlalchemy.orm import relationship
 
 from app.models.base import Base
@@ -9,7 +9,13 @@ from app.models.mixin.timestamp import TimestampMixin
 
 class TreatmentItem(Base, TimestampMixin):
     __tablename__ = "treatment_item"
-    __table_args__: ClassVar[dict] = {"comment": "시술 항목 테이블"}
+    # treatment_id FK 는 자동완료/목록 조인에서 자주 필터되므로 인덱스를 추가한다.
+    # dict-only __table_args__ 를 (Index(...), {...}) 튜플 형태로 변환.
+    # (SPEC-FIX-001 REQ-FIX-005)
+    __table_args__: ClassVar[tuple] = (
+        Index("ix_treatment_item_treatment_id", "treatment_id"),
+        {"comment": "시술 항목 테이블"},
+    )
 
     id = Column(Integer, primary_key=True, index=True, comment="시술 항목 ID")
     treatment_id = Column(

@@ -1,0 +1,25 @@
+# SPEC-INFRA-002 Progress
+
+- Started: 2026-07-07
+- Mode: TDD (sub-agent), harness 판정 예정 (보안 도메인 → thorough 후보)
+- Plan phase 완료: research/spec/plan/acceptance 작성, annotation cycle 1로 설계 쟁점 4건 확정, status approved (v1.0.0)
+- Phase 1.5 complete: 10 tasks decomposed
+- 2026-07-07 M1 complete (T-101~T-103, characterization-first):
+  - T-101: `tests/test_config_characterization.py` 8항목 선작성 → 리팩터링 전 `8 passed` (GREEN 기준점 확보).
+  - T-102: `app/core/config.py` → pydantic-settings `Settings(BaseSettings)` + `settings` 싱글톤(`@MX:ANCHOR`), env-var > .env > secrets_dir 우선순위, `SENTRY_DSN`/`REDIS_URL`/`FIREBASE_...` degrade, `_SECRETS_DIR` 부재 tolerant(pathlib). `tests/test_config_settings.py` 7 케이스 GREEN. (pydantic-settings 실제 API 는 `_secrets_dir` init 키워드 — 계약 예시의 `secrets_dir=` 는 무시되는 extra 라 `_secrets_dir` 로 구현.)
+  - T-103: 소비처 전환 — security/auth_service/api.auth/exceptions/utils.redis.auth/main/database/redis_client/celery_app(root)/sentry/firebase + alembic/env.py(Risk5: override=True→False, settings.DATABASE_URL). 특성화 항목 8(REDIS_URL 이중 하드코딩)은 `xfail(strict=False)` 로 예정된 RED 전환 문서화.
+  - 테스트 증거: before `76 passed, 5 failed` → after `90 passed, 1 xfailed, 5 failed`(동일 pre-existing 5건). config 커버리지 `app/core/config.py 100%`(≥90%).
+  - 게이트: os.getenv(REDIS_URL/SECRET_KEY/DATABASE_URL/FERNET_KEY) 0건, 대문자 직접 import(tests 포함) 0건, alembic `load_dotenv override=True` 0건. 변경 소스 파일 ruff NEW findings 0(순증 −8, 미사용 import 정리). alembic history/settings.DATABASE_URL 해석 OK.
+  - 딜리버리 범위 준수: M2~M4 산출물(docker-stack.yml/deploy_migrate.sh/cd.yml/docs) 미변경 — devops 에이전트 담당.
+  - 잔존 `os.getenv("ENV","dev")`(alembic/env.py:15)는 .env.{env} 파일 선택자로 중앙 Settings 스키마 대상이 아니라 의도적으로 유지(게이트 대상 아님).
+- 2026-07-07 M2~M4 complete (T-104~T-110, expert-devops):
+  - T-104: `docker-stack.yml` 최상위 `secrets:` 에 `kmc_secret_key_v1`/`kmc_fernet_key_v1`/`kmc_database_url_v1`(`external: true`) 추가, `kmcbeauty_api`/`celery_worker`/`celery_beat` 3개 서비스에 long-syntax `source`→`target=필드명` 마운트. `docker compose config -q` exit 0, YAML target 검증 PASS, `grep -c kmc_` = 17(≥6).
+  - T-105: `.env.prod.example` 재작성 — SECRET_KEY/FERNET_KEY/DATABASE_URL 값 라인 제거·시크릿 인벤토리 주석 대체, REDIS_URL/비시크릿 유지. 민감 값 라인 0건. (sandbox 가 `.env.prod*` Read 차단 → Write 도 read-first 가드로 불가, git HEAD 내용 기반 bash heredoc 로 작성.)
+  - T-106: `deploy_migrate.sh` 컨테이너 경로를 일회성 Swarm 서비스로 개편. `docker run`/`env-file` 문자열 0건(주석 리워딩 포함). `--restart-condition=none` + `--secret ...DATABASE_URL/SECRET_KEY/FERNET_KEY`(alembic env.py 가 full settings import → 필수 필드 3종 시크릿 마운트, 비시크릿 ALGORITHM/토큰만료/ENV 는 `-e`), 상태 폴링(`docker service ps`)·로그·`ExitCode` inspect·`docker service rm`(trap)·fail-fast. `--local` 분기 `${DATABASE_URL:?}` 가드(계약 위반 위험 1). `bash -n` OK.
+  - T-107: `scripts/setup_github_secrets.sh` 신규 — `gh secret set` SWARM_SSH_HOST/USER/KEY, 값 하드코딩 금지(env/no-echo 프롬프트/키파일), `--check` 모드(`gh secret list`), idempotent. `bash -n` OK.
+  - T-108/T-110: `docs/deployment.md` 갱신 — 2절 Docker 시크릿 인벤토리·stdin 등록·no-op 함정, 5절 일회성 Swarm 서비스 마이그레이션·`--local` DATABASE_URL 요구, 6절 GitHub 시크릿 인벤토리(소유자)·등록 스크립트·사전 검증 게이트, 9절 회전 runbook(Docker secret `_v2` source 교체·target 불변·grace 기간 + SSH 키 회전). 1절 stale cp 안내 정정.
+  - T-109: `cd.yml` SSH 인라인 스크립트에 `deploy_migrate.sh` 이전 시크릿 사전 검증(`docker secret ls` grep, 누락 시 `exit 1`) + `.env.prod` 존재 확인. 계약 줄번호 게이트 PASS(pre-check@88 < migrate@111). YAML parse OK.
+  - 테스트: `90 passed, 1 xfailed, 5 failed`(M1 baseline 동일, 회귀 0). app/ python·M1 테스트 미변경.
+  - 계약 편차(보고): (1) 마이그레이션 서비스에 SECRET_KEY/FERNET_KEY 시크릿 추가 마운트 — alembic env.py 가 `app.core.config.settings`(필수 필드) import 하므로 DATABASE_URL 단독으론 Settings() 인스턴스화 실패. 정당한 기능적 보강. (2) AC-6 계약 grep `SECRET_KEY\s*=\s*[^$#\s]` 가 M1 잔여 하위호환 별칭 `config.py:74-75 (SECRET_KEY = settings.SECRET_KEY)` 을 매칭 — 이는 Python 변수 참조(평문 시크릿 아님)이며 M1 산출물(수정 금지 범위). `= settings.` 제외 시 실제 평문 시크릿 0건. M1 소유자가 패턴 정련 또는 config.py 제외 필요.
+  - 라이브 유예(acceptance.md): AC-5 실마운트/AC-7 마이그레이션 E2E/AC-9 abort 동작/AC-10 무중단 회전 — Swarm·GitHub Actions 환경에서 배포 리허설로 검증.
+- Phase 2.8a: evaluator strict PASS (Sec 100/Func 100/Craft 92/Cons 95), dead alias 정리 반영

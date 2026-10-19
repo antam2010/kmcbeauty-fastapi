@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import EmailStr
 from sqlalchemy.orm import Session
 
+from app.core.rate_limit import limiter
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
@@ -51,7 +52,10 @@ def read_user_handler(
         status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
     },
 )
+# 가입 남용 · 초대코드 대입 방지: IP 당 분당 5회
+@limiter.limit("5/minute")
 def create_user_handler(
+    request: Request,  # noqa: ARG001  # slowapi limiter 가 IP 추출을 위해 request 를 요구한다
     user: UserCreate,
     db: Session = Depends(get_db),
 ) -> UserResponse:
@@ -118,7 +122,10 @@ def delete_user_force_handler(
     description="이메일 중복 체크 API",
     status_code=status.HTTP_200_OK,
 )
+# 가입 여부(계정) 열거 방지: IP 당 분당 20회
+@limiter.limit("20/minute")
 def check_user_exsist(
+    request: Request,  # noqa: ARG001  # slowapi limiter 가 IP 추출을 위해 request 를 요구한다
     email: EmailStr = Query(..., description="이메일 주소"),
     db: Session = Depends(get_db),
 ) -> UserEmailCheckResponse:

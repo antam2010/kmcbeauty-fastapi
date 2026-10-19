@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, status
-from fastapi_pagination import Page
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies.shop import get_current_shop
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
+from app.models.shop import Shop
+from app.schemas.pagination import Page
 from app.schemas.treatment_menu import (
     TreatmentMenuCreate,
     TreatmentMenuCreateResponse,
@@ -37,7 +38,7 @@ router = APIRouter(prefix="/treatment-menus", tags=["시술 메뉴"])
 def get_menus(
     filters: TreatmentMenuFilter = Depends(),
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> Page[TreatmentMenuResponse]:
     return get_treatment_menus_service(
         db=db,
@@ -61,7 +62,7 @@ def get_menus(
 def create_menu(
     params: TreatmentMenuCreate,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> TreatmentMenuCreateResponse:
     return create_treatment_menu_service(
         db=db,
@@ -82,7 +83,7 @@ def update_menu(
     menu_id: int,
     params: TreatmentMenuCreate,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> TreatmentMenuCreateResponse:
     return create_treatment_menu_service(
         db=db,
@@ -103,10 +104,12 @@ def update_menu(
 def delete_menu(
     menu_id: int,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> None:
     return delete_treatment_menu_service(
-        db=db, current_shop=current_shop, menu_id=menu_id,
+        db=db,
+        current_shop=current_shop,
+        menu_id=menu_id,
     )
 
 
@@ -121,10 +124,12 @@ def delete_menu(
 def restore_menu(
     menu_id: int,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> None:
     return restore_treatment_menu_service(
-        db=db, current_shop=current_shop, menu_id=menu_id,
+        db=db,
+        current_shop=current_shop,
+        menu_id=menu_id,
     )
 
 
@@ -139,7 +144,7 @@ def restore_menu(
 def get_menu_detail(
     menu_id: int,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> list[TreatmentMenuDetailResponse]:
     return get_treatment_menu_detail_service(
         menu_id=menu_id,
@@ -164,8 +169,8 @@ def create_menu_detail(
     menu_id: int,
     filters: TreatmentMenuDetailCreate,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
-):
+    current_shop: Shop = Depends(get_current_shop),
+) -> TreatmentMenuDetailResponse:
     return create_treatment_menu_detail_service(
         menu_id=menu_id,
         current_shop=current_shop,
@@ -191,7 +196,7 @@ def update_menu_detail(
     detail_id: int,
     params: TreatmentMenuDetailCreate,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> TreatmentMenuDetailResponse:
     return create_treatment_menu_detail_service(
         menu_id=menu_id,
@@ -214,7 +219,7 @@ def delete_menu_detail(
     menu_id: int,
     detail_id: int,
     db: Session = Depends(get_db),
-    current_shop=Depends(get_current_shop),
+    current_shop: Shop = Depends(get_current_shop),
 ) -> None:
     return delete_treatment_menu_detail_service(
         menu_id=menu_id,

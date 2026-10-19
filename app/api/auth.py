@@ -3,7 +3,8 @@ from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from app.core.config import REFRESH_TOKEN_EXPIRE_SECONDS
+from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.database import get_db
 from app.docs.common_responses import COMMON_ERROR_RESPONSES
 from app.schemas.auth import LoginResponse
@@ -31,7 +32,9 @@ router = APIRouter(prefix="/auth", tags=["인증"])
         ],
     },
 )
+@limiter.limit("5/minute")
 def login(
+    request: Request,  # noqa: ARG001  # slowapi limiter 가 IP 추출을 위해 request 를 요구한다
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -49,7 +52,7 @@ def login(
         httponly=True,
         secure=True,
         samesite="None",  # Lax, Strict, None
-        max_age=REFRESH_TOKEN_EXPIRE_SECONDS,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_SECONDS,
     )
     return response
 
@@ -64,6 +67,8 @@ def login(
         status.HTTP_401_UNAUTHORIZED: {"description": "리프레시 토큰이 유효하지 않음"},
     },
 )
+# 리프레시 토큰 대입 · 재발급 남용 방지: IP 당 분당 30회
+@limiter.limit("30/minute")
 def refresh_token_handler(
     request: Request,
     db: Session = Depends(get_db),
@@ -81,7 +86,7 @@ def refresh_token_handler(
         httponly=True,
         secure=True,
         samesite="None",  # Lax, Strict, None
-        max_age=REFRESH_TOKEN_EXPIRE_SECONDS,
+        max_age=settings.REFRESH_TOKEN_EXPIRE_SECONDS,
     )
     return response
 
@@ -97,11 +102,9 @@ def logout(request: Request) -> JSONResponse:
     result = logout_user(token)
     response = JSONResponse(
         status_code=status.HTTP_200_OK,
-        content={
-            "message": "로그아웃 성공",
-            "token": token,
-            "result": result,
-        },
+        # 리프레시 토큰은 응답 본문에 되돌려주지 않는다(로그 · 프록시 · 클라이언트
+        # 저장소 노출 방지). 앱은 로그아웃 응답 본문을 쓰지 않는다.
+        content={"message": "로그아웃 성공", "result": result},
     )
     response.delete_cookie("refresh_token", path="/")
     return response

@@ -1,0 +1,97 @@
+# ==============================================================================
+# 로컬 개발용 Compose (SPEC-INFRA-001, REQ-INFRA-012)
+#
+# 목적: 로컬 개발 스택 전체를 compose 로 기동한다 (앱 + Redis 필수, 워커 선택).
+#   docker compose -f docker/compose/compose.dev.yml up -d --build        # api + redis
+#   docker compose -f docker/compose/compose.dev.yml --profile worker up -d  # + Celery 워커
+#   docker compose -f docker/compose/compose.dev.yml exec api alembic upgrade head  # 마이그레이션
+#   docker compose -f docker/compose/compose.dev.yml down                 # 종료
+#
+# 마이그레이션(alembic)은 반드시 컨테이너 안에서 실행한다 — WSL 셸에서는 Windows 방화벽
+#   때문에 Windows 호스트의 PostgreSQL 에 접근할 수 없다.
+#
+# 핫리로드: 소스를 바인드 마운트하고 uvicorn --reload 로 실행하므로
+#   코드 저장 즉시 반영된다(이미지 재빌드는 requirements.txt 변경 시에만 필요).
+#
+# ⚠️ 개발 전용(DEV ONLY): 이 파일은 운영에 사용하지 않는다.
+#   운영 배포는 docker-stack.yml(Swarm) — 시크릿/헬스 게이팅/무중단 롤링 포함.
+#   DB 는 compose 에 포함하지 않는다 — Windows 호스트에서 네이티브로 실행하는
+#   PostgreSQL 을 컨테이너에서 host.docker.internal:5432 로 접근한다(데이터베이스 kmcbeauty).
+#   접속 정보는 .env 의 DATABASE_URL 로 설정한다.
+# ==============================================================================
+
+# compose 프로젝트 이름 (Docker Desktop 그룹명·컨테이너 접두사)
+name: kmcbeauty-dev
+
+services:
+  # --- FastAPI 앱 (핫리로드) ---------------------------------------------------
+  api:
+    build:
+      context: ../..
+    # 이미지 CMD 에 --reload 만 추가(내부 포트는 이미지 기본 8000).
+    # --reload-dir 로 감시 범위를 소스 디렉토리로 한정한다 — /app 전체를 감시하면
+    # 바인드 마운트(.git/.venv/logs)의 유령 이벤트로 "changes detected" 가 무한 반복됨
+    # (WSL 크로스 마운트에서 watchfiles 폴링 오탐 + 파일 로그 피드백 루프).
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --reload
+      --reload-dir app --reload-dir worker
+    # 바인드 마운트된 소스(호스트 uid 1000 소유)에 logs/ 등을 쓸 수 있도록
+    # 이미지의 appuser 대신 호스트 uid 로 실행한다(개발 전용 관행).
+    user: "1000:1000"
+    ports:
+      - "3200:8000" # 호스트 3200 → 컨테이너 8000. http://localhost:3200/docs
+    env_file:
+      # 로컬 개발 env (.env). 배포용 .env.prod 는 사용하지 않는다.
+      - ../../.env
+    environment:
+      # 컨테이너 안에서는 localhost 가 아닌 compose 서비스 DNS 로 Redis 에 접근한다.
+      # (environment 가 env_file 보다 우선하므로 .env 의 localhost 값을 덮어쓴다)
+      REDIS_URL: redis://redis:6379/0
+      # 컨테이너 로깅은 stdout 단일화 — 파일 로그는 권한·리로더 루프 부작용만 유발.
+      LOG_TO_FILE: "false"
+    volumes:
+      # 소스 바인드 마운트 → uvicorn --reload 핫리로드
+      - ../..:/app
+    extra_hosts:
+      # 호스트 PostgreSQL(host.docker.internal:5432) 접근용.
+      # .env 의 DATABASE_URL 호스트는 localhost 가 아니라 host.docker.internal 로 지정한다
+      # (컨테이너 안의 localhost 는 컨테이너 자신이다).
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
+
+  # --- Celery 워커 (선택) : `--profile worker` 로만 기동 -----------------------
+  worker:
+    build:
+      context: ../..
+    profiles: ["worker"]
+    command: celery -A celery_app worker --loglevel=info
+    # api 와 동일 — 바인드 마운트 쓰기 권한을 위해 호스트 uid 로 실행.
+    user: "1000:1000"
+    env_file:
+      - ../../.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ../..:/app
+    extra_hosts:
+      # api 와 동일 — 호스트 PostgreSQL(host.docker.internal:5432) 접근용.
+      - "host.docker.internal:host-gateway"
+    # 이미지 내장 HEALTHCHECK(curl /health)는 웹서버 전용 — celery 에는 비활성.
+    healthcheck:
+      disable: true
+    depends_on:
+      - redis
+
+  # --- Redis (필수) : 레이트리밋/캐시/Celery 브로커 ---------------------------
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    # 호스트 포트 미공개 — api/worker 는 내부 DNS(redis:6379)로 접근하므로 불필요하고,
+    # 다른 프로젝트의 로컬 Redis 와 6379 충돌도 방지한다.
+    # 데이터 확인이 필요하면: docker compose exec redis redis-cli
+    volumes:
+      - redis_dev_data:/data
+
+volumes:
+  redis_dev_data:

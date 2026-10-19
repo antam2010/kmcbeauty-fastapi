@@ -26,14 +26,21 @@ from app.schemas.dashboard import (
 )
 from app.utils.redis.dashboard import (
     clear_dashboard_cache,
+    day_period,
     get_dashboard_cache,
+    get_dashboard_cache_key,
+    get_dashboard_cache_version,
+    month_period,
     set_dashboard_cache,
 )
 
 T = TypeVar("T")
 
 
-def get_dashboard_summary_service(
+# 대시보드 집계 오케스트레이션: 캐시 키 정의·타입 디스패치·최종 조립이 한 흐름에
+# 묶여 있어 분리 시 다수 지역 클로저(shop/db 캡처)와 캐시 경계가 흩어진다.
+# 동작 보존 우선으로 복잡도 규칙을 억제한다.
+def get_dashboard_summary_service(  # noqa: C901, PLR0915
     db: Session,
     shop: Shop,
     params: DashboardFilter,
@@ -49,26 +56,34 @@ def get_dashboard_summary_service(
     )
 
     # ---- 캐시 키 정의 ----
-    t_target_key = ("summary", target_date.isoformat())
-    t_month_key = ("summary", month_start.isoformat())
-    s_target_key = ("sales", target_date.isoformat())
-    s_month_key = ("sales", month_start.isoformat())
-    c_insight_key = ("customer_insight", target_date.isoformat())
-    staff_target_key = ("staff_summary", target_date.isoformat())
-    staff_month_key = ("staff_summary", month_start.isoformat())
+    # 기간 종류(day/month)를 키에 넣는다. 날짜만 쓰면 1일 조회 시 일 키와 월 키
+    # (month_start)가 같아져 월간 통계에 하루치가 섞이거나 그 반대가 된다.
+    # 캐시 버전은 요청당 한 번 읽는다. 예약 쓰기 커밋 후 버전이 오르면 이전 키는
+    # 더 이상 읽히지 않는다(bump_dashboard_cache_version, TTL 로 만료).
+    cache_version = get_dashboard_cache_version(shop.id)
+    day = day_period(target_date)
+    month = month_period(target_date)
+    t_target_key = ("summary", day)
+    t_month_key = ("summary", month)
+    s_target_key = ("sales", day)
+    s_month_key = ("sales", month)
+    c_insight_key = ("customer_insight", day)
+    staff_target_key = ("staff_summary", day)
+    staff_month_key = ("staff_summary", month)
 
     # ---- 유틸: 이터러블/Row/직렬화 보조 ----
     def _is_iterable_but_not_str(x: object) -> bool:
         return isinstance(x, Iterable) and not isinstance(x, (str, bytes, bytearray))
 
-    def _row_to_plain(x: object):
+    def _row_to_plain(x: object) -> object:
         """SQLAlchemy Row 지원: Row -> dict, 그 외는 그대로."""
         if hasattr(x, "_mapping"):  # sqlalchemy.engine.Row
-            return dict(x._mapping)
+            # SQLAlchemy Row 는 dict 변환용 공개 API 로 _mapping 을 노출한다.
+            return dict(x._mapping)  # noqa: SLF001
         return x
 
-    def _to_cacheable(obj: object):
-        """캐시에 넣을 때: Pydantic 모델이면 model_dump(), Row면 dict, 리스트는 원소별 처리."""
+    def _to_cacheable(obj: object) -> object:
+        """캐시 저장용 변환: 모델이면 model_dump, Row면 dict, 리스트는 원소별 처리."""
         if isinstance(obj, list):
             out = []
             for it in obj:
@@ -82,36 +97,51 @@ def get_dashboard_summary_service(
         return _row_to_plain(obj)
 
     # ---- 공통 캐시 처리 함수 ----
-    def get_or_set_cache(
+    # 반환형 확정(제너레이터/Row/tuple/Mapping 방어) 분기가 본질적으로 많아
+    # 분리하면 오히려 타입 디스패치 흐름이 흩어진다. 동작 보존 우선으로 억제한다.
+    def get_or_set_cache(  # noqa: C901, PLR0912
         key_tuple: tuple[str, str],
         get_func: Callable[[], list[T] | T],
         pydantic_model: type[T] | None = None,
         force_refresh: bool = False,
     ) -> list[T] | T:
         field, period = key_tuple
+        cache_key = get_dashboard_cache_key(shop.id, cache_version, field, period)
         if force_refresh:
-            clear_dashboard_cache(shop.id, field, period)
+            clear_dashboard_cache(cache_key)
 
-        cached = get_dashboard_cache(shop.id, field, period)
+        cached = get_dashboard_cache(cache_key)
         if cached is not None and not force_refresh:
             # 캐시 히트: 모델로 복원
             if pydantic_model:
                 if isinstance(cached, list):
                     logging.debug(
-                        f"Cache hit for {field} on {period} for shop {shop.id} - multiple items",
+                        "Cache hit for %s on %s for shop %s - multiple items",
+                        field,
+                        period,
+                        shop.id,
                     )
                     return [pydantic_model.model_validate(v) for v in cached]
                 logging.debug(
-                    f"Cache hit for {field} on {period} for shop {shop.id} - single item",
+                    "Cache hit for %s on %s for shop %s - single item",
+                    field,
+                    period,
+                    shop.id,
                 )
                 return pydantic_model.model_validate(cached)
             logging.debug(
-                f"Cache hit for {field} on {period} for shop {shop.id} - raw data",
+                "Cache hit for %s on %s for shop %s - raw data",
+                field,
+                period,
+                shop.id,
             )
             return cached
 
         logging.debug(
-            f"Cache miss for {field} on {period} for shop {shop.id}, fetching data...",
+            "Cache miss for %s on %s for shop %s, fetching data...",
+            field,
+            period,
+            shop.id,
         )
 
         # 1) 원본 취득
@@ -162,7 +192,7 @@ def get_dashboard_summary_service(
 
         # 3) 캐시에 넣기 (항상 직렬화된 형태)
         to_cache = _to_cacheable(result_obj)
-        set_dashboard_cache(shop.id, field, period, to_cache)
+        set_dashboard_cache(cache_key, to_cache)
 
         return result_obj
 

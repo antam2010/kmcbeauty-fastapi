@@ -1,14 +1,14 @@
 #!/bin/bash
 
-echo "🛑 FastAPI 컨테이너 중지 중..."
+echo "🛑 FastAPI 중지 중..."
 
-# Swarm 모드인지 확인 후 제거
-if docker info | grep -q "Swarm: active"; then
-    docker stack rm fastapi_stack
-    docker swarm leave --force
-    echo "✅ Swarm 모드 종료 완료."
+# Swarm 스택 배포(start_swarm.sh) 사용 시 제거.
+# 로컬 개발 compose 스택은 이 스크립트가 아니라 아래 명령으로 종료한다:
+#   docker compose -f docker/compose/compose.dev.yml down
+if docker info 2>/dev/null | grep -q "Swarm: active"; then
+    docker stack rm kmcbeauty
+    echo "✅ Swarm 스택(kmcbeauty) 제거 완료."
 else
-    docker-compose -f docker-compose.dev.yml down
-    docker-compose -f docker-compose.stage.yml down
-    echo "✅ 로컬 컨테이너 종료 완료."
+    echo "ℹ️ Swarm 비활성 — 제거할 스택 없음."
 fi
+echo "ℹ️ 로컬 compose 스택 종료: docker compose -f docker/compose/compose.dev.yml down (호스트 직접 실행 uvicorn 은 Ctrl+C)"
