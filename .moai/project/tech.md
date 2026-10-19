@@ -64,8 +64,20 @@
 
 > **주의:** bcrypt는 passlib 호환성 문제로 `4.0.1`로 고정됨. 업그레이드 시 검증 필요.
 
-- bearer 인증은 액세스 토큰만 허용 (`type == "access"` 검증), 소프트삭제(탈퇴) 유저는 즉시 401
+- bearer 인증은 액세스 토큰만 허용 (`type == "access"` 검증), 토큰 재발급(`/auth/refresh`)은 리프레시 토큰만 허용 (`type == "refresh"`)
+- 소프트삭제(탈퇴) 유저는 즉시 401. 멤버십 행은 남지만 멤버 판정·담당자·푸시 대상·직원 목록에서 제외되고, 탈퇴 시 디바이스 토큰 비활성화
+- 세션 정리(유저 캐시·리프레시 토큰 삭제)는 탈퇴·정보 수정의 DB 커밋이 성공한 뒤에만 수행. 로그아웃 응답은 토큰을 돌려주지 않음
 - 샵 데이터 접근은 멤버십(`shop_user`) 기준이며, 예약의 고객·담당자·메뉴 상세 참조는 현재 샵 소속만 허용
+- 초대 코드는 1회용: 가입 트랜잭션에서 `SELECT … FOR UPDATE` 로 잠근 뒤 소비(삭제) — 동시 가입은 두 번째가 실패
+- 비밀번호 최소 8자 (가입·변경 스키마만, 로그인 폼은 길이 검사 없음)
+
+### 입력 검증 · 오류 매핑
+
+- 요청 스키마의 문자열 길이·숫자 범위를 DB 컬럼에 맞춤 (`app/schemas/limits.py`) — 초과 시 DataError 500 대신 422
+- 조회 날짜 필터 1900-01-01 ~ 2100-12-31, 페이지 번호 1 ~ 100000 (`app/schemas/pagination.py`, size 상한 100)
+- DB 값 오류(`sqlalchemy.exc.DataError` — NUL 바이트, 범위 초과 등)는 400 `{DOMAIN}_BAD_REQUEST` + 일반 문구:
+  `CustomException` 생성 시 원인 예외를 보고 5xx 를 400 으로 바꾸고, 서비스가 감싸지 않은 DataError 는
+  `app/main.py` 의 전역 핸들러가 처리한다. 원문은 응답에 싣지 않고 경고 로그로만 남기며 Sentry 로 보내지 않는다.
 
 ---
 
@@ -89,13 +101,15 @@ Celery 작업:
 
 | 라이브러리 | 버전 | 용도 |
 |-----------|------|------|
-| slowapi | 0.1.10 | 요청 속도 제한 — 저장소 `RATE_LIMIT_STORAGE_URI` (기본 `memory://`, 운영은 Redis DB 1) |
+| slowapi | 0.1.10 | 요청 속도 제한 — 저장소 `RATE_LIMIT_STORAGE_URI` (기본 `memory://`, 운영은 Redis DB 1). IP 기준 분당: 로그인 5 · 가입 5 · 이메일 확인 20 · 재발급 30 · 초대 생성 10 · 푸시 발송 10 |
 | limits | 5.8.0 | slowapi 저장소 백엔드 |
 | fastapi-pagination | 0.15.15 | 페이지 기반 페이지네이션 |
 | firebase-admin | 7.5 | FCM 푸시 알림 발송 (같은 샵 멤버 대상만 허용) |
 | Sentry SDK | 2.64 | 에러 추적 및 성능 트레이싱 |
 
-Sentry 설정: `traces_sample_rate=0.2`, `send_default_pii=False`(요청 쿠키·본문 자동 첨부 차단), 사용자 식별은 id 만 전송, 로컬·디버그 환경에서 비활성화.
+Sentry 설정: `traces_sample_rate=0.2`, `send_default_pii=False`(요청 쿠키·본문 자동 첨부 차단), `include_local_variables=False`(프레임 지역변수 미전송), `EventScrubber` 기본 목록 + `refresh_token`/`x-refresh-token`/`x_refresh_token`(재귀), 사용자 식별은 id 만 전송, 로컬·디버그 환경에서 비활성화.
+
+API 문서: `/docs` · `/redoc` · `/openapi.json` · `/changelog` 는 `APP_ENV=production` 에서 비공개 (`app/main.py` `api_docs_kwargs`), local/debug/stage 는 공개.
 
 ---
 
