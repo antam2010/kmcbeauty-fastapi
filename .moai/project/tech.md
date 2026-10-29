@@ -101,7 +101,7 @@ Celery 작업:
 
 | 라이브러리 | 버전 | 용도 |
 |-----------|------|------|
-| slowapi | 0.1.10 | 요청 속도 제한 — 저장소 `RATE_LIMIT_STORAGE_URI` (기본 `memory://`, 운영은 Redis DB 1). IP 기준 분당: 로그인 5 · 가입 5 · 이메일 확인 20 · 재발급 30 · 초대 생성 10 · 푸시 발송 10 |
+| slowapi | 0.1.10 | 요청 속도 제한 — 저장소 `RATE_LIMIT_STORAGE_URI` (기본 `memory://`, 운영은 공유 Redis DB 6). IP 기준 분당: 로그인 5 · 가입 5 · 이메일 확인 20 · 재발급 30 · 초대 생성 10 · 푸시 발송 10 |
 | limits | 5.8.0 | slowapi 저장소 백엔드 |
 | fastapi-pagination | 0.15.15 | 페이지 기반 페이지네이션 |
 | firebase-admin | 7.5 | FCM 푸시 알림 발송 (같은 샵 멤버 대상만 허용) |
@@ -127,21 +127,26 @@ API 문서: `/docs` · `/redoc` · `/openapi.json` · `/changelog` 는 `APP_ENV=
 
 ## 인프라
 
-### Docker Swarm 스택 (`docker-stack.yml`)
+### 운영 compose 프로젝트 (`compose.prod.yaml`, 프로젝트 이름 `kmcbeauty`)
 
-| 서비스 | 레플리카 | 포트 | 네트워크 | 비고 |
-|--------|---------|------|---------|------|
-| `kmcbeauty_api` | 2 | `:8000` (내부) | `shared_network_prod` + `backend` | rolling update(start-first) + 헬스 게이팅 + 자동 롤백 |
-| `redis` | 1 | (내부) | `backend` | redis:7-alpine, appendonly, `redis_data` 볼륨. 접속명 `kmcbeauty_redis` (DB 0 브로커·캐시, DB 1 rate limit) |
-| `celery_worker` | 2 | — | `backend` | 태스크 처리 |
-| `celery_beat` | 1 | — | `backend` | 단일 레플리카 (중복 디스패치 방지) |
+운영 서버: 인프라 저장소 server-mini2 가 관리하는 서버(공유 nginx · PostgreSQL 18 · Redis, 앱은 모두 일반 docker compose
+— Swarm 미사용). 공개 주소 `https://api-beauty.dongri.kr`. 첫 배포 절차는 `docs/deployment.md` 10절.
 
-- 외부 포트 노출 없음: NGINX 가 `shared_network_prod` overlay 로 `kmcbeauty_api:8000` 에만 접근한다.
-  Redis(무인증)·worker·beat 는 스택 전용 overlay `backend` 에만 연결된다.
-- 프록시 신뢰: `.env.prod` 의 `FORWARDED_ALLOW_IPS` = `shared_network_prod` 서브넷 CIDR. uvicorn 이 X-Forwarded-For 로
-  실제 클라이언트 IP 를 복원한다(rate limit 키). `*` 는 금지 — XFF 맨 왼쪽(위조 가능) 값을 쓰게 된다.
-- 헬스체크: `curl /health` (Dockerfile 설정)
-- 실서버는 아직 없음 — 첫 배포 절차는 `docs/deployment.md` 10절
+| 서비스 = container_name | 메모리 상한 | 네트워크 | 비고 |
+|--------|------|---------|------|
+| `kmcbeauty-api` | 512m | `shared_network_prod` | expose `:8000`(호스트 포트 없음). 헬스체크는 이미지(curl /health) |
+| `kmcbeauty-celery-worker` | 512m | `shared_network_prod` | `--concurrency=2`, 헬스체크 끔 |
+| `kmcbeauty-celery-beat` | 256m | `shared_network_prod` | 단일 인스턴스(중복 디스패치 방지), 헬스체크 끔 |
+
+- 네트워크는 서버 인프라의 외부 bridge `shared_network_prod` 하나뿐이다. 공유 nginx(고정 IP) · `postgresql` · `redis` 가
+  같은 네트워크에 있어 컨테이너 이름으로 닿는다. 서비스 이름 = container_name 이라 `api` 같은 일반 별칭이 생기지 않는다.
+- 외부 포트 노출 없음: 공유 nginx 가 `kmcbeauty-api:8000` 으로 프록시한다(resolver + 변수 proxy_pass, 원본 `deploy/nginx/api-beauty.conf`).
+- 전용 Redis 없음: 공유 Redis DB 5(캐시 · 리프레시 토큰 · Celery 브로커/결과), DB 6(rate limit). 비밀번호 필수.
+- 프록시 신뢰: `.env.prod` 의 `FORWARDED_ALLOW_IPS` = `shared_network_prod` 에서의 nginx IP(`deploy.sh` 가 `docker inspect` 값과 비교).
+  uvicorn 이 X-Forwarded-For 로 실제 클라이언트 IP 를 복원한다(rate limit 키). `*` 는 금지.
+- 기동: `up -d --wait`(api healthy · celery running). compose 는 바뀐 컨테이너를 정지 → 재생성하므로 배포 때 api 가
+  잠깐 응답하지 않는다(롤링 · 자동 롤백 없음 — 롤백 명령은 deploy.sh 가 출력).
+- `restart: unless-stopped`, 로그는 json-file 10m × 3 회전. 이미지: `${IMAGE_TAG:?…}` 필수(미지정 시 렌더 실패).
 
 ### 설정 로딩 스택
 
@@ -151,39 +156,45 @@ API 문서: `/docs` · `/redoc` · `/openapi.json` · `/changelog` 는 `APP_ENV=
 |------|---------|------|
 | 환경변수 (`os.environ`) | 1 (최고) | 로컬 개발·테스트·CI |
 | `.env` / `.env.prod` | 2 | `env_file` fallback |
-| Docker secrets (`/run/secrets/`) | 3 (기본) | `secrets_dir="/run/secrets"` |
+| 시크릿 파일 (`/run/secrets/`) | 3 (기본) | `secrets_dir="/run/secrets"`, 값의 앞뒤 공백 제거 |
 
 - 로컬 개발: `.env` 파일 (compose 가 `REDIS_URL` 을 `redis://redis:6379/0` 으로 덮어씀)
-- Swarm 배포: Docker secrets 마운트 + `.env.prod` 비시크릿 값 (`.env.prod` 에 시크릿 키를 두면 secret 을 덮어쓰므로 CD 사전 검증이 차단)
+- 운영: compose secrets(서버 `secrets/` 파일) 마운트 + `.env.prod` 비시크릿 값 (`.env.prod` 에 시크릿 키를 두면 시크릿 파일을 덮어쓰므로 `scripts/deploy.sh` 사전 검사가 차단)
 - `.env.example`: 로컬 변수 문서화 템플릿
-- `.env.prod.example`: 운영 변수 문서화 템플릿 (민감 키는 "managed via Docker secret" 표기)
+- `.env.prod.example`: 운영 변수 문서화 템플릿 (시크릿은 `secrets/` 파일 목록과 URL 형식만 주석으로)
 
-### Docker secrets (Swarm)
+### 시크릿 파일 (compose secrets)
 
-| external 이름 | target (컨테이너 내 파일) | 서비스 |
+서버 배포 디렉터리의 `secrets/`(0700, 배포 계정 소유)에 파일(0644, 끝 줄바꿈 없음)을 두고 compose 가 읽기 전용
+bind mount 한다. 컨테이너는 시스템 uid(appuser)로 돌므로 0644 여야 읽힌다.
+
+| 파일 | target (컨테이너 내 파일) | 서비스 |
 |--------------|------------------------|------|
-| `firebase_service_account` | `firebase_service_account` | api, celery_worker, celery_beat |
-| `kmc_secret_key_v1` | `SECRET_KEY` | api, celery_worker, celery_beat |
-| `kmc_fernet_key_v1` | `FERNET_KEY` | api, celery_worker, celery_beat |
-| `kmc_database_url_v1` | `DATABASE_URL` | api, celery_worker, celery_beat, migration(일회성) |
+| `firebase_service_account.json` | `firebase_service_account` | api, celery_worker, celery_beat |
+| `secret_key` | `SECRET_KEY` | api, celery_worker, celery_beat, migration(일회성 run) |
+| `fernet_key` | `FERNET_KEY` | api, celery_worker, celery_beat, migration(일회성 run) |
+| `database_url` | `DATABASE_URL` | api, celery_worker, celery_beat, migration(일회성 run) |
+| `redis_url` | `REDIS_URL` | api, celery_worker, celery_beat |
+| `rate_limit_storage_uri` | `RATE_LIMIT_STORAGE_URI` | api |
 
-`target` 은 불변 — 회전 시 external 이름(버전 suffix)만 교체하므로 앱 코드 변경 불필요. 첫 배포에서는 `kmc_database_url_v1` 에 PostgreSQL URL 을 넣는다.
+`target` = Settings 필드명이라 앱 코드는 주입 방식과 무관하다. 교체는 파일을 바꾸고 `up -d --force-recreate`(앱은 시작 시에만 읽는다). `scripts/deploy.sh` 의 `SECRET_FILES` 와 compose 파일 목록은 가드 테스트가 대조한다. Redis URL 은 공유 Redis 비밀번호가 들어가 시크릿이다. Firebase 키는 실제 키 전까지 `{}`(초기화만 실패, 푸시 불가). `FERNET_KEY` 로 암호화해 저장하는 데이터는 현재 없다(`encrypt_token`/`decrypt_token` 미사용).
 
 ### CI/CD 파이프라인
 
 | 파일 | 트리거 | 역할 |
 |------|--------|------|
 | `.github/workflows/ci.yml` | PR / `workflow_call` | ruff check + format-check + pytest (Python 3.13, pip 캐시) |
-| `.github/workflows/cd.yml` | main push | CI(재사용) 통과 → GHCR 빌드·푸시 → 이미지 import 스모크 → SSH 사전 검증 → 커밋 SHA 체크아웃 → 마이그레이션 → stack deploy |
+| `.github/workflows/cd.yml` | main push | CI(재사용) 통과 → GHCR 빌드·푸시 → 이미지 import 스모크 → OpenSSH 로 서버 강제 명령 `deploy <sha>` → `scripts/deploy_entry.sh`(main 조상 확인 · 체크아웃) → `scripts/deploy.sh`(사전 검사 · pull · pg_dump · 마이그레이션 · compose up --wait · 상태 확인 · 스모크) |
 
 - 이미지 레지스트리: `ghcr.io/antam2010/kmcbeauty-api:<sha>` (불변 SHA 태그)
 - 배포 시 `IMAGE_TAG` 환경변수 치환으로 `:latest` 함정 회피
-- 배포 직렬화: 워크플로 단위 concurrency `production-deploy` (진행 중 배포는 취소하지 않음)
-- 사전 검증: 필수 Docker secret, `.env.prod` 의 시크릿 키 정의 금지, `REDIS_URL`(localhost 금지)·`FORWARDED_ALLOW_IPS`(`*` 금지) 필수, `shared_network_prod` 가 `overlay swarm`
-- SSH 호스트 키 검증: 선택 시크릿 `SWARM_SSH_FINGERPRINT` (미등록 시 검증 생략)
-- `--with-registry-auth` 로 멀티 노드에서도 GHCR pull
-- Docker secrets: `firebase_service_account`, `kmc_secret_key_v1`, `kmc_fernet_key_v1`, `kmc_database_url_v1` (api, celery_worker, celery_beat 모두 마운트)
-- CD 수동 승인 게이트: GitHub environment `production` 보호 규칙
+- 배포 직렬화: 워크플로 단위 concurrency `production-deploy` (진행 중 배포는 취소하지 않음) + 서버 flock 잠금
+- SSH: 서드파티 액션 없이 OpenSSH, `StrictHostKeyChecking=yes` + 시크릿 `DEPLOY_SSH_KNOWN_HOSTS` 로 호스트 키 고정. CI 키는 서버에서 `restrict,command="…/deploy_entry.sh"` 강제 명령에만 묶임
+- GitHub 시크릿: `DEPLOY_SSH_HOST` · `DEPLOY_SSH_PORT` · `DEPLOY_SSH_USER` · `DEPLOY_SSH_KEY` · `DEPLOY_SSH_KNOWN_HOSTS` (`scripts/setup_github_secrets.sh`)
+- 서버의 GHCR pull: deploy 잡의 `GITHUB_TOKEN`(packages: read)을 stdin 으로 넘겨 임시 DOCKER_CONFIG 로 login → pull → logout
+- 사전 검사(deploy.sh): docker compose 사용 가능, `shared_network_prod` 존재, nginx 가 그 네트워크에 붙어 있음, `.env.prod` 의 `APP_ENV=production` · 시크릿 키 정의 금지 · `FORWARDED_ALLOW_IPS` = nginx IP, `secrets/` 0700 · 파일 6개 0644, HEAD = 요청 sha · 추적 파일 깨끗, `compose config -q`
+- 운영 DB 는 `alembic upgrade head` 만(downgrade 없음, `compose run --rm` 일회성 컨테이너), 매 배포 전 `pg_dump -Fc` 백업
+- 승인 게이트 없음: GitHub environment `production` 은 이력용(필수 리뷰어 없음) — main 병합 = 배포
 
 ---
 

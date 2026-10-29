@@ -29,19 +29,25 @@ KMCBeauty FastAPI 프로젝트 실행 가이드
 위 스크립트는 호스트에서 uvicorn 을 직접 실행합니다. 기본 로컬 개발 경로는 Docker Compose
 스택(7절)이며, 호스트 직접 실행은 호스트에서 DB(PostgreSQL)에 접근 가능해야 합니다.
 
-컨테이너 배포는 docker-compose 대신 단일 Swarm 스택(docker-stack.yml)을 사용합니다.
-배포 상세(시크릿/마이그레이션/롤백/CI-CD)는 ``docs/deployment.md`` 를 참조하세요.
+운영은 서버(인프라 저장소 server-mini2 가 관리)의 docker compose 프로젝트 ``kmcbeauty``
+(``compose.prod.yaml``)로 돌며, ``main`` 에 병합하면 GitHub Actions(CD)가 자동 배포합니다
+(CI → GHCR 이미지 빌드·푸시 → SSH 강제 명령 ``scripts/deploy_entry.sh`` → ``scripts/deploy.sh``).
+공개 주소는 https://api-beauty.dongri.kr 이고, nginx 설정 원본은 ``deploy/nginx/api-beauty.conf`` 입니다.
+첫 배포 준비·시크릿·롤백 절차는 ``docs/deployment.md`` (10절 첫 배포 runbook)를 참조하세요.
 
-배포는 로컬 ``.env`` 가 아니라 ``.env.prod`` 를 사용합니다(REDIS_URL 을 스택 전체
-서비스명 ``redis://kmcbeauty_redis:6379/0`` 로 설정). 최초 1회 ``cp .env.prod.example .env.prod``
-후 실제 값을 채웁니다. 이미지 태그는 가변 ``latest`` 가 아니라 불변 커밋 SHA(IMAGE_TAG)를 사용합니다.
+운영 설정은 로컬 ``.env`` 가 아니라 서버 배포 디렉터리의 ``.env.prod`` (비시크릿만, 템플릿
+``.env.prod.example``)와 ``secrets/`` 파일(SECRET_KEY · FERNET_KEY · DATABASE_URL · REDIS_URL ·
+RATE_LIMIT_STORAGE_URI · Firebase 키 — compose secrets 로 마운트)로 주입합니다. DB·Redis 는 서버의
+공유 PostgreSQL·Redis 를 씁니다. 이미지 태그는 가변 ``latest`` 가 아니라 불변 커밋 SHA(IMAGE_TAG)입니다.
 
-Swarm 배포(단일 노드, 로컬 빌드 이미지)::
+서버에서 수동 배포(배포 디렉터리에서, 대상 커밋을 먼저 체크아웃)::
 
-    ./scripts/start_swarm.sh
-    # 또는 수동(불변 태그 주입):
-    IMAGE_TAG=ghcr.io/antam2010/kmcbeauty-api:<git-sha> \
-        docker stack deploy -c docker-stack.yml kmcbeauty
+    git fetch --prune origin main && git checkout --detach <40자-sha>
+    scripts/deploy.sh <40자-sha>
+
+서버에서 운영 컨테이너 중지(외부 네트워크·secrets/·DB 는 남음)::
+
+    ./scripts/stop.sh
 
 
 3. Alembic 마이그레이션
@@ -58,7 +64,7 @@ DB에 마이그레이션 반영::
 
     alembic upgrade head
 
-DB에 마이그레이션 롤백::
+DB에 마이그레이션 롤백(로컬 전용 — 운영 DB 에는 ``upgrade`` 만 실행, ``docs/deployment.md`` 5절)::
 
     alembic downgrade -1
 
@@ -70,7 +76,8 @@ DB에 마이그레이션 롤백::
 - Swagger UI: http://localhost:3200/docs
 - ReDoc: http://localhost:3200/redoc
 
-(로컬 uvicorn 기준. Swarm 배포 시 호스트 포트 미공개 — 외부 NGINX가 kmcbeauty_api:8000 라우팅)
+(로컬 uvicorn 기준. 운영은 호스트 포트 미공개 — 공유 NGINX가 kmcbeauty-api:8000 라우팅,
+운영(APP_ENV=production)에서는 API 문서를 공개하지 않음)
 
 
 5. 의존성 목록 저장 (선택)
@@ -97,12 +104,14 @@ DB에 마이그레이션 롤백::
     ├── crud/
     alembic/
     ├── versions/
-    docker-stack.yml
+    compose.prod.yaml
     Dockerfile
+    deploy/
+    └── nginx/api-beauty.conf
     scripts/
     ├── start_local.sh
-    ├── start_swarm.sh
-    ├── deploy_migrate.sh
+    ├── deploy.sh
+    ├── deploy_entry.sh
     ├── setup_github_secrets.sh
     └── stop.sh
 
@@ -144,12 +153,6 @@ pre-commit 훅 설치(커밋 시 ruff lint+format 자동 실행)::
 코드 스타일 수동 적용(ruff lint + format)::
 
     ruff check --fix . && ruff format .
-
-8. 2노드 확장
-========================
-
-Swarm 워커 노드 조인, placement 제약(celery_beat/redis), NGINX 업스트림 고려사항은
-``docs/scaling.md`` 를 참조하세요.
 
 추가 TODO
 =============

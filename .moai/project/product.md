@@ -80,7 +80,7 @@ RESERVED ──(직원 방문 처리)──> VISITED ──(시술 종료 후 �
 
 | 항목 | 현황 |
 |------|------|
-| 가용성 | Docker Swarm 2 레플리카, rolling update + 자동 롤백 |
+| 가용성 | 단일 서버 docker compose(컨테이너 1개씩, `restart: unless-stopped`, 배포 시 헬스체크 대기). 배포 중 api 가 잠깐 중단되고 자동 롤백은 없다(deploy.sh 가 롤백 명령 안내) |
 | 성능 | uvloop + httptools + orjson 적용, Redis 캐싱 |
 | 모니터링 | Sentry SDK (traces_sample_rate 0.2, PII 자동 첨부·지역변수 전송 차단, 리프레시 토큰 키 스크럽, 로컬/디버그 비활성) |
 | 보안 | argon2 기본 해시 + bcrypt 레거시 지원, Fernet 대칭 암호화, 토큰 타입 검증, 테넌트 격리(멤버십·교차 참조 검증), 민감 API 요청 횟수 제한, 1회용 초대 코드 |
@@ -94,7 +94,7 @@ RESERVED ──(직원 방문 처리)──> VISITED ──(시술 종료 후 �
 - 앱의 비밀번호 검사가 아직 4자 기준이다(`profile.tsx`, `InviteSignupForm.tsx`). 8자로 맞추기 전까지 4~7자 입력은 서버에서 422 로 거절된다.
 - 앱은 초대 코드 조회 404(사용됨·없음)를 "활성 코드 없음"으로 처리해야 한다.
 - `GET /summary/dashboard` 를 `target_date` 없이 호출하면 422 (앱은 항상 전달).
-- 실서버는 아직 구축되지 않았다. 첫 Swarm 배포 절차는 `docs/deployment.md` 10절을 따른다.
+- 운영 서버(server-mini2 관리)에는 아직 배포 전이다. 첫 배포(docker compose) 절차는 `docs/deployment.md` 10절을 따른다.
 - FK `ON DELETE` 보강 후보: `shop.user_id`, `treatment.phonebook_id`
 - 마지막 대표원장을 보호하는 장치가 없다 (정책 결정 필요).
 - 테스트는 DB 를 모킹하며 CI 에 PostgreSQL 이 없다. PostgreSQL 호환은 로컬 실DB 스모크로 확인한다.

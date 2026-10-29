@@ -14,7 +14,7 @@
 #   코드 저장 즉시 반영된다(이미지 재빌드는 requirements.txt 변경 시에만 필요).
 #
 # ⚠️ 개발 전용(DEV ONLY): 이 파일은 운영에 사용하지 않는다.
-#   운영 배포는 docker-stack.yml(Swarm) — 시크릿/헬스 게이팅/무중단 롤링 포함.
+#   운영 배포는 저장소 루트의 compose.prod.yaml(프로젝트 kmcbeauty) — 시크릿 파일/헬스체크 대기 포함.
 #   DB 는 compose 에 포함하지 않는다 — Windows 호스트에서 네이티브로 실행하는
 #   PostgreSQL 을 컨테이너에서 host.docker.internal:5432 로 접근한다(데이터베이스 kmcbeauty).
 #   접속 정보는 .env 의 DATABASE_URL 로 설정한다.

@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 
 # ==============================================================================
-# Production Dockerfile (Docker Swarm)
-# - Single-stage, production-oriented image for `docker stack deploy`.
-# - App code is COPIED into the image (Swarm deploys images, not bind mounts).
+# Production Dockerfile (docker compose, compose.prod.yaml)
+# - Single-stage, production-oriented image. CD 가 GHCR 에 커밋 SHA 태그로 올리고
+#   서버의 scripts/deploy.sh 가 `docker compose up` 으로 띄운다.
+# - App code is COPIED into the image (production runs images, not bind mounts).
 # - Runs as a non-root user and listens on internal port 8000 (uvicorn default).
 #   호스트/외부 노출 포트는 배포 계층(compose ports, NGINX)에서 매핑한다.
 # ==============================================================================

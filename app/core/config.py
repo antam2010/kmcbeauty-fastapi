@@ -6,15 +6,15 @@ pydantic-settings ``BaseSettings`` 로 모든 설정을 단일 ``Settings`` 객�
 (``/run/secrets``) 파일 > 필드 기본값.
 - 환경변수가 secrets 파일보다 우선하므로 로컬 개발과 테스트 스위트(conftest 의
   ``os.environ`` 주입)가 그대로 동작한다(REQ-INFRA-101).
-- 컨테이너(Docker Swarm)에서는 시크릿이 ``/run/secrets/<필드명>`` 파일로 마운트되며,
-  필드명(case-sensitive)이 곧 컨테이너 내 시크릿 파일명과 일치한다.
+- 운영 컨테이너(docker compose secrets)에서는 시크릿이 ``/run/secrets/<필드명>``
+  파일로 마운트되며, 필드명(case-sensitive)이 곧 컨테이너 내 시크릿 파일명과 일치한다.
 """
 
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Docker Swarm 이 시크릿을 마운트하는 표준 경로.
+# Docker(compose secrets)가 시크릿 파일을 마운트하는 표준 경로.
 # 로컬/CI/개발 환경에는 이 디렉터리가 없다. 존재할 때만 secrets 소스로 등록해
 # pydantic-settings 의 "directory does not exist" 경고 출력을 억제한다(EC-2).
 _SECRETS_DIR = "/run/secrets"
@@ -23,7 +23,7 @@ _SECRETS_DIR = "/run/secrets"
 class Settings(BaseSettings):
     """중앙 설정 스키마.
 
-    필드명은 case-sensitive 이며 Docker secret 의 ``target``(컨테이너 파일명)과
+    필드명은 case-sensitive 이며 compose secret 의 ``target``(컨테이너 파일명)과
     정확히 일치한다(예: ``SECRET_KEY`` → ``/run/secrets/SECRET_KEY``).
     시크릿 필드는 SPEC 결정에 따라 plain ``str`` 로 유지한다(SecretStr 미채택).
     """
@@ -46,17 +46,18 @@ class Settings(BaseSettings):
     # SENTRY_DSN 부재 시 빈 문자열 degrade → Sentry 비활성 기동(REQ-INFRA-104).
     SENTRY_DSN: str = ""
 
-    # --- 비시크릿 인프라 설정 ---
-    # REDIS_URL 은 자격 증명이 없는 내부 오버레이 DNS 이므로 시크릿화하지 않고
-    # 이 객체에서 단일 정의한다(REQ-INFRA-103: redis_client/celery_app 이중 정의 통일).
-    # 기본값은 로컬 dev compose 의 서비스 DNS 다. 운영(Swarm)은 .env.prod 에서
-    # 스택 전체 서비스명(redis://kmcbeauty_redis:6379/0)을 지정한다
-    # (공유 네트워크의 다른 `redis` 와 이름 충돌 방지).
+    # --- 인프라 설정(운영에서는 Redis URL 도 시크릿) ---
+    # REDIS_URL 은 이 객체에서 단일 정의한다
+    # (REQ-INFRA-103: redis_client/celery_app 이중 정의 통일).
+    # 기본값은 로컬 dev compose 의 서비스 DNS 다. 운영의 공유 Redis 는
+    # 비밀번호가 필수라 URL 에 자격 증명이 들어간다
+    # (redis://:<password>@redis:6379/5) → 서버의 시크릿 파일 secrets/redis_url 을
+    # compose secret 으로 /run/secrets/REDIS_URL 에 주입하고 .env.prod 에는 두지 않는다.
     REDIS_URL: str = "redis://redis:6379/0"
     # rate limit(slowapi/limits) 카운터 저장소. 기본 memory:// 는 프로세스 로컬이라
-    # 로컬 개발·테스트 전용이다(레플리카마다 한도가 따로 적용됨). 운영은 레플리카 간
-    # 카운터를 공유하도록 Redis 를 지정한다
-    # (.env.prod: redis://kmcbeauty_redis:6379/1 — 브로커·캐시의 DB 0 과 분리).
+    # 로컬 개발·테스트 전용이다(프로세스마다 한도가 따로 적용됨). 운영은 공유 Redis
+    # DB 6 을 쓴다(redis://:<password>@redis:6379/6 — REDIS_URL 의 DB 5 와 분리).
+    # 역시 비밀번호가 들어가 secrets/rate_limit_storage_uri 파일로 주입한다.
     RATE_LIMIT_STORAGE_URI: str = "memory://"
     # Firebase 서비스 계정 키 경로. 미설정 시 빈 문자열 → 초기화 스킵(현행 보존).
     FIREBASE_SERVICE_ACCOUNT_KEY_PATH: str = ""

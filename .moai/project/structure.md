@@ -13,14 +13,16 @@ kmcbeauty-fastapi/
 ├── tests/                # pytest 테스트 (DB-free 재현·회귀 테스트, tests/fake_sql.py 헬퍼)
 ├── scripts/              # 배포·기동 스크립트 (git 실행 비트 100755 — 가드 테스트로 강제)
 ├── worker/               # Celery 작업 모듈
-├── docs/                 # 운영 문서 (deployment.md, scaling.md)
+├── docs/                 # 운영 문서 (deployment.md)
+├── deploy/
+│   └── nginx/api-beauty.conf  # 공유 nginx 설정 원본 (server-mini2 nginx/conf.d 로 복사)
 ├── docker/               # 환경별 Compose 파일
 │   └── compose/
 │       └── compose.dev.yml  # 로컬 개발용 (api 핫리로드 + Redis, worker 는 --profile; DB 는 호스트 PostgreSQL)
 ├── .github/
 │   └── workflows/        # GitHub Actions (ci.yml, cd.yml)
 ├── celery_app.py         # Celery 애플리케이션 팩토리
-├── docker-stack.yml      # Docker Swarm 배포 스택
+├── compose.prod.yaml     # 운영 compose 프로젝트 kmcbeauty (kmcbeauty-api · -celery-worker · -celery-beat, 외부 bridge shared_network_prod, secrets/ 파일)
 ├── Dockerfile            # 단일 스테이지 컨테이너 빌드
 ├── requirements.txt      # 의존성 목록 (전이 의존성까지 고정)
 ├── .env.example          # 환경변수 문서화 템플릿 (로컬)
@@ -137,7 +139,7 @@ tests/
 ├── test_*_fix.py                   # 버그 재현·회귀 (PG 호환, 집계, 자동완료, 캐시, 멤버십 등)
 ├── test_*_perf.py                  # 성능 가드 (목록 상한 등)
 ├── test_api_contract_endpoints.py  # API 계약 테스트
-├── test_infra_guards.py            # 배포 산출물 가드 (:latest 금지, 스크립트 실행 비트)
+├── test_infra_guards.py            # 배포 산출물 가드 (:latest 금지, compose 네트워크·포트·이름·시크릿·IMAGE_TAG·메모리, 사설 IP 금지, 스크립트 실행 비트, cd.yml SSH, deploy_entry.sh 거부 행위)
 └── test_rate_limit_storage.py      # rate limit 저장소 설정
 ```
 
@@ -149,8 +151,8 @@ tests/
 
 | 파일 | 용도 |
 |------|------|
-| `scripts/start_swarm.sh` | Swarm init + overlay 네트워크 생성 + 스택 배포 |
+| `scripts/deploy.sh` | 운영 배포(서버에서 실행): 잠금 → 사전 검사 → GHCR pull → 직전 이미지 기록 → pg_dump 백업 → 마이그레이션(`compose run --rm`, head 확인) → `compose up -d --wait` → 상태 확인 → 스모크 → 롤백 명령 안내 |
+| `scripts/deploy_entry.sh` | CI 키 전용 SSH 강제 명령: `deploy <40자 sha>` 만 허용, main 조상 확인 · 체크아웃 후 deploy.sh exec |
 | `scripts/start_local.sh` | 호스트에서 uvicorn 직접 실행 (기본 로컬 경로는 compose) |
-| `scripts/stop.sh` | 서비스 중지 |
-| `scripts/deploy_migrate.sh` | 배포 전 Alembic 마이그레이션 실행 (일회성 Swarm 서비스로 시크릿 마운트, manager 노드 고정) |
-| `scripts/setup_github_secrets.sh` | `gh secret set` 기반 GitHub Actions 시크릿 등록·갱신 자동화 (선택 `SWARM_SSH_FINGERPRINT` 포함) |
+| `scripts/stop.sh` | 운영 compose 프로젝트(kmcbeauty) 컨테이너 중지 — 서버에서만 의미 있음(로컬 개발 스택은 compose.dev 로 종료) |
+| `scripts/setup_github_secrets.sh` | `gh secret set` 기반 GitHub Actions 배포 시크릿(`DEPLOY_SSH_*`) 등록·점검 자동화 |

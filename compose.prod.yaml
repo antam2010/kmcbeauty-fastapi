@@ -1,0 +1,153 @@
+# ==============================================================================
+# 운영 compose 프로젝트 kmcbeauty — 단일 서버, 일반 docker compose (SPEC-INFRA-001/002 운영 적용)
+#
+# 대상: 인프라 저장소 server-mini2 가 관리하는 서버(공유 nginx · PostgreSQL · Redis).
+#   - 배포는 scripts/deploy.sh 가 한다(CD 는 SSH 강제 명령 scripts/deploy_entry.sh 로 호출):
+#        IMAGE_TAG=ghcr.io/antam2010/kmcbeauty-api:<git-sha> \
+#          docker compose -p kmcbeauty -f compose.prod.yaml up -d --remove-orphans --wait
+#   - 로컬 개발은 docker/compose/compose.dev.yml(프로젝트 kmcbeauty-dev)이다. 로컬과 운영은 일부러 다르다.
+#   - PostgreSQL · Redis · nginx 는 여기서 정의하지 않는다. 서버 인프라의 공유 컨테이너에
+#     외부 bridge 네트워크 shared_network_prod 에서 컨테이너 이름(postgresql, redis)으로 닿는다.
+#
+# 이름: 서비스 이름 = container_name = kmcbeauty-* . 공유 네트워크에서는 서비스 이름도 DNS 별칭이
+#   되므로 `api` 같은 일반 이름을 쓰지 않는다. nginx 는 kmcbeauty-api:8000 으로 프록시한다
+#   (deploy/nginx/api-beauty.conf). 호스트 포트는 공개하지 않는다(ports 없음, expose 만).
+#
+# 이미지 태그 (REQ-INFRA-003, 불변 태그):
+#   - `${IMAGE_TAG:?...}` 필수 — 미지정이면 config/up 이 즉시 실패한다. 운영은 커밋 SHA 태그만 쓴다.
+#   - 가변 `latest` 태그는 절대 사용하지 않는다.
+#   - 오류 메시지에 '-' 를 넣지 않는다. docker CLI(stack)의 치환은 '-'(기본값) 규칙을 ':?' 보다
+#     먼저 적용해 메시지를 기본값으로 바꿔 버린다(compose v2 는 영향 없음 — 가드 테스트가 검사).
+#
+# 환경 변수 (REQ-INFRA-001):
+#   - 비시크릿은 `.env.prod`(env_file). FORWARDED_ALLOW_IPS = shared_network_prod 에서의 nginx
+#     컨테이너 IP — deploy.sh 가 docker inspect 값과 같은지 검사한다(IP 는 저장소에 적지 않는다).
+#
+# 시크릿 (compose file secrets):
+#   - 서버의 ./secrets/<파일> 을 컨테이너 /run/secrets/<target> 에 읽기 전용 bind mount 한다.
+#     target = Settings 필드명이라 앱의 우선순위(env > .env > /run/secrets)가 그대로다.
+#   - bind mount 라 파일 권한이 그대로 보인다: 이미지의 appuser(시스템 uid)가 읽도록 파일은 0644,
+#     다른 호스트 사용자가 못 보도록 디렉터리는 0700(배포 계정 소유). deploy.sh 가 검사한다.
+#   - .env.prod 에 시크릿 필드를 두면 env 가 시크릿 파일을 조용히 덮어쓴다 — deploy.sh 가 거부한다.
+#   - 앱은 시작할 때 한 번 읽는다. 파일을 바꾸면 `up -d --force-recreate` 로 다시 만든다(docs 9절).
+# ==============================================================================
+name: kmcbeauty
+
+# 세 서비스가 공유하는 설정(이미지 · 재시작 · env · 네트워크 · 로그 회전).
+x-kmcbeauty-common: &kmcbeauty-common
+  image: ${IMAGE_TAG:?scripts/deploy.sh 가 불변 커밋 SHA 태그로 export 한다}
+  restart: unless-stopped
+  env_file:
+    # 배포 전용 env. 로컬 `.env` 를 배포에 사용하지 않는다(REQ-INFRA-001).
+    - .env.prod
+  environment:
+    # 시크릿 경로는 여기서 고정한다(.env.prod 누락 시에도 항상 동일 경로, REQ-INFRA-002).
+    FIREBASE_SERVICE_ACCOUNT_KEY_PATH: /run/secrets/firebase_service_account
+    # 컨테이너 로깅은 stdout 단일화(docker logs 로 수집) — 파일 로그 비활성.
+    LOG_TO_FILE: "false"
+  networks:
+    - shared_network_prod
+  # 로그 회전 — 서버 인프라(server-mini2)의 다른 서비스와 같은 json-file 10m × 3.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  # --- FastAPI application ---------------------------------------------------
+  # nginx 에서:  kmcbeauty-api:8000  (shared_network_prod, 요청마다 이름 해석)
+  # 헬스체크는 이미지(Dockerfile HEALTHCHECK, curl /health)를 그대로 쓴다 — up --wait 가 healthy 를 기다린다.
+  kmcbeauty-api:
+    <<: *kmcbeauty-common
+    container_name: kmcbeauty-api
+    # command 미지정 → 이미지 CMD(uvicorn :8000) 사용. 포트 정의는 Dockerfile 한 곳으로 일원화.
+    expose:
+      - "8000"
+    secrets:
+      # target(컨테이너 파일명) = Settings 필드명 → /run/secrets/<필드명>.
+      - source: firebase_service_account
+        target: firebase_service_account
+      - source: secret_key
+        target: SECRET_KEY
+      - source: fernet_key
+        target: FERNET_KEY
+      - source: database_url
+        target: DATABASE_URL
+      # 공유 Redis(비밀번호 포함 URL): DB 5 = 캐시·리프레시 토큰·Celery, DB 6 = rate limit 카운터.
+      - source: redis_url
+        target: REDIS_URL
+      - source: rate_limit_storage_uri
+        target: RATE_LIMIT_STORAGE_URI
+    mem_limit: 512m
+
+  # --- Celery worker ---------------------------------------------------------
+  # 같은 이미지. 브로커·결과 백엔드는 공유 Redis DB 5(REDIS_URL 시크릿).
+  kmcbeauty-celery-worker:
+    <<: *kmcbeauty-common
+    container_name: kmcbeauty-celery-worker
+    # 동시성 2: 서버 자원이 작고(기본값은 CPU 수) 30분 주기 태스크 하나라 충분하다.
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    secrets:
+      - source: firebase_service_account
+        target: firebase_service_account
+      - source: secret_key
+        target: SECRET_KEY
+      - source: fernet_key
+        target: FERNET_KEY
+      - source: database_url
+        target: DATABASE_URL
+      - source: redis_url
+        target: REDIS_URL
+    # 이미지 내장 HEALTHCHECK(curl /health)는 웹서버 전용 — celery 프로세스가 상속하면
+    # 항상 unhealthy 가 되므로 명시적으로 끈다(up --wait 는 running 을 기다린다).
+    healthcheck:
+      disable: true
+    mem_limit: 512m
+
+  # --- Celery beat (scheduler) ----------------------------------------------
+  # 반드시 하나만 돈다(중복 기동 시 스케줄 태스크가 중복 디스패치된다).
+  kmcbeauty-celery-beat:
+    <<: *kmcbeauty-common
+    container_name: kmcbeauty-celery-beat
+    command: celery -A celery_app beat --loglevel=info
+    secrets:
+      # beat 는 celery_app 로드 시 app.core.firebase 를 전이 import 하므로 같은 시크릿을 받는다.
+      - source: firebase_service_account
+        target: firebase_service_account
+      - source: secret_key
+        target: SECRET_KEY
+      - source: fernet_key
+        target: FERNET_KEY
+      - source: database_url
+        target: DATABASE_URL
+      - source: redis_url
+        target: REDIS_URL
+    healthcheck:
+      disable: true
+    mem_limit: 256m
+
+networks:
+  # 서버 인프라(server-mini2)의 외부 bridge 네트워크. 공유 nginx(고정 IP) · postgresql · redis 가
+  # 붙어 있다. 이 프로젝트는 만들거나 지우지 않는다(down 해도 남는다).
+  shared_network_prod:
+    external: true
+    name: shared_network_prod
+
+secrets:
+  # 서버의 배포 디렉터리 ./secrets/ (0700, 배포 계정 소유) 안의 파일(0644). 저장소에는 없다
+  # (.gitignore /secrets/). 만드는 법은 docs/deployment.md 10절 (c). scripts/deploy.sh 의
+  # SECRET_FILES 와 같아야 한다(tests/test_infra_guards.py 가 대조).
+  secret_key:
+    file: ./secrets/secret_key
+  fernet_key:
+    file: ./secrets/fernet_key
+  database_url:
+    file: ./secrets/database_url
+  redis_url:
+    file: ./secrets/redis_url
+  rate_limit_storage_uri:
+    file: ./secrets/rate_limit_storage_uri
+  # Firebase 서비스 계정 키 JSON. 실제 키 전에는 '{}' 자리표시자 — 초기화만 실패하고 앱은 뜬다.
+  firebase_service_account:
+    file: ./secrets/firebase_service_account.json
