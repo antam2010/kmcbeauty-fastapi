@@ -1,7 +1,8 @@
 from datetime import datetime
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
+from app.schemas.limits import PG_INT_MAX
 from app.schemas.mixin.base import BaseResponseModel
 from app.utils.phone import is_valid_korean_phone_number, normalize_korean_phone_number
 
@@ -11,8 +12,12 @@ class ShopPhoneValidatorMixin:
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str | None) -> str | None:
+        # null 은 전화번호 없음이다(생략과 같다). 정규화에 넘기면 AttributeError(500).
+        if v is None:
+            return None
         if v and not is_valid_korean_phone_number(v):
-            raise ValueError("유효하지 않은 전화번호입니다.")
+            msg = "유효하지 않은 전화번호입니다."
+            raise ValueError(msg)
         return normalize_korean_phone_number(v)
 
 
@@ -31,12 +36,12 @@ class ShopBase(BaseResponseModel):
 
 # 샵 생성 요청 스키마
 class ShopCreate(ShopBase, ShopPhoneValidatorMixin):
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 # 샵 수정 요청 스키마
 class ShopUpdate(ShopBase, ShopPhoneValidatorMixin):
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
 # 샵 응답 스키마
@@ -45,10 +50,9 @@ class ShopResponse(ShopBase):
     created_at: datetime = Field(..., description="생성일")
     updated_at: datetime = Field(..., description="수정일")
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 
-# 샵 선택 요청 파라미터
-# version: 1.0
+# 샵 선택 요청 파라미터 (버전 1.0)
 class ShopSelect(BaseResponseModel):
-    shop_id: int = Field(..., description="샵 ID")
+    shop_id: int = Field(..., description="샵 ID", ge=1, le=PG_INT_MAX)

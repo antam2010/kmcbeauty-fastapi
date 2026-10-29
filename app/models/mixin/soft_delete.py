@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -9,7 +10,7 @@ class SoftDeleteMixin:
         comment="삭제일시",
     )
 
-    __mapper_args__ = {"eager_defaults": True}
+    __mapper_args__: ClassVar[dict] = {"eager_defaults": True}
 
     def soft_delete(self) -> None:
         self.deleted_at = datetime.now(UTC)

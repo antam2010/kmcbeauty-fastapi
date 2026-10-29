@@ -5,8 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.crud.shop_crud import (
     create_shop,
+    get_member_shop_by_id,
+    get_member_shops,
     get_user_shop_by_id,
-    get_user_shops,
 )
 from app.crud.shop_user_crud import ShopUser, create_shop_user
 from app.exceptions import CustomException
@@ -56,6 +57,7 @@ def upsert_shop_service(
             db.refresh(shop)
             db.refresh(shop_user)
         else:
+            # 샵 수정은 관리 경로다. 멤버십이 아니라 생성자(Shop.user_id)만 허용한다.
             shop = get_user_shop_by_id(db, user.id, shop_id)
             if not shop:
                 raise CustomException(
@@ -67,6 +69,11 @@ def upsert_shop_service(
                 setattr(shop, key, value)
             db.commit()
             db.refresh(shop)
+    except CustomException:
+        # 404 등 의도한 거절은 그대로 전파한다.
+        # 아래 except Exception 에 잡히면 500 으로 바뀐다.
+        db.rollback()
+        raise
     except SQLAlchemyError as e:
         db.rollback()
         raise CustomException(
@@ -90,12 +97,14 @@ def upsert_shop_service(
 def get_my_shops_service(db: Session, user: User) -> Page[Shop]:
     """샵 목록 조회 서비스.
 
+    생성자 여부와 무관하게 유저가 멤버(shop_user)로 속한 활성 샵을 준다.
+
     :param db: DB 세션
     :param user: 현재 로그인한 유저
     :return: 샵 목록
     """
     try:
-        return get_user_shops(db, user.id)
+        return get_member_shops(db, user.id)
     except SQLAlchemyError as e:
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -114,13 +123,15 @@ def get_my_shops_service(db: Session, user: User) -> Page[Shop]:
 def set_selected_shop_service(db: Session, user: User, shop_id: int) -> None:
     """샵 선택 서비스.
 
+    멤버(shop_user)인 활성 샵만 선택할 수 있다. 비멤버는 404.
+
     :param db: DB 세션
     :param user: 현재 로그인한 유저
     :param shop_id: 선택할 샵 ID
     :return: 선택된 샵 객체
     """
     try:
-        shop = get_user_shop_by_id(db, user.id, shop_id)
+        shop = get_member_shop_by_id(db, user.id, shop_id)
         if not shop:
             raise CustomException(status_code=status.HTTP_404_NOT_FOUND, domain=DOMAIN)
         set_selected_shop_redis(user.id, shop.id)
@@ -184,7 +195,8 @@ def get_selected_shop_service(db: Session, user: User) -> Shop:
                 code="NOT_SELECTED",
             )
 
-        shop = get_user_shop_by_id(db, user.id, shop_id)
+        # 선택값(Redis)은 신뢰하지 않고 멤버십을 다시 확인한다.
+        shop = get_member_shop_by_id(db, user.id, shop_id)
         if shop:
             return shop
 

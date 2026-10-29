@@ -1,9 +1,10 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import ClassVar
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from app.enum.treatment_status import PaymentMethod, TreatmentStatus
+from app.schemas.limits import FILTER_DATE_MAX, FILTER_DATE_MIN, PG_INT_MAX
 from app.schemas.mixin.base import BaseModel, BaseResponseModel
 from app.schemas.phonebook import PhonebookResponse
 from app.schemas.treatment_item import (
@@ -17,11 +18,21 @@ from app.schemas.user import UserBase
 class TreatmentBase(BaseResponseModel):
     """시술 정보의 기본 스키마."""
 
-    phonebook_id: int | None = Field(None, description="시술 대상 고객 ID (선택)")
-    customer_name: str | None = Field(None, description="고객명 (전화번호부 미등록 시)")
+    phonebook_id: int | None = Field(
+        None,
+        description="시술 대상 고객 ID (선택)",
+        ge=1,
+        le=PG_INT_MAX,
+    )
+    customer_name: str | None = Field(
+        None,
+        description="고객명 (전화번호부 미등록 시)",
+        max_length=100,
+    )
     customer_phone: str | None = Field(
         None,
         description="고객 전화번호 (전화번호부 미등록 시)",
+        max_length=20,
     )
     reserved_at: datetime = Field(..., description="예약 일시")
     memo: str | None = Field(None, description="메모")
@@ -35,7 +46,22 @@ class TreatmentBase(BaseResponseModel):
         None,
         description="시술 담당자 유저 ID",
         ge=1,
+        le=PG_INT_MAX,
     )
+
+    @field_validator("reserved_at", "finished_at")
+    @classmethod
+    def ensure_storable_datetime(cls, v: datetime | None) -> datetime | None:
+        # 오프셋이 있는 일시는 UTC 로 바뀌어 저장된다(세션 TZ=UTC). 그 결과가 파이썬
+        # 범위(1~9999년) 밖이면 INSERT 는 되지만 다시 읽을 때 드라이버가 실패해, 그
+        # 예약이 든 목록 조회가 계속 500 이다. 요청 단계에서 거절한다(422).
+        if v is not None and v.tzinfo is not None:
+            try:
+                v.astimezone(UTC)
+            except OverflowError as e:
+                msg = "UTC 로 바꾸면 0001~9999년을 벗어나는 일시는 저장할 수 없습니다."
+                raise ValueError(msg) from e
+        return v
 
 
 class TreatmentCreate(TreatmentBase):
@@ -50,9 +76,14 @@ class TreatmentCreate(TreatmentBase):
 class TreatmentUpdate(TreatmentBase):
     """시술 수정 스키마."""
 
-    treatment_items: list[TreatmentItemUpdate] = Field(
-        default_factory=list,
-        description="시술 항목 리스트",
+    # 다른 필드처럼 부분 수정이다. 생략/null 이면 기존 항목을 그대로 두고, 목록을
+    # 보내면 그 목록으로 맞춘다(빈 목록은 항목 전체 삭제).
+    treatment_items: list[TreatmentItemUpdate] | None = Field(
+        None,
+        description=(
+            "시술 항목 리스트. 생략하거나 null 이면 기존 항목을 유지하고, "
+            "목록을 보내면 그 목록으로 교체한다(빈 목록이면 전체 삭제)."
+        ),
     )
 
 
@@ -111,8 +142,19 @@ class TreatmentResponse(TreatmentInDBBase):
 class TreatmentFilter(BaseModel):
     """시술 필터링 스키마."""
 
-    start_date: date | None = Field(None, description="예약 시작일 (YYYY-MM-DD)")
-    end_date: date | None = Field(None, description="예약 종료일 (YYYY-MM-DD)")
+    # 날짜 계산(KST→UTC 경계, 종료일 + 1일)이 넘치지 않는 범위만 받는다(밖은 422).
+    start_date: date | None = Field(
+        None,
+        description="예약 시작일 (YYYY-MM-DD)",
+        ge=FILTER_DATE_MIN,
+        le=FILTER_DATE_MAX,
+    )
+    end_date: date | None = Field(
+        None,
+        description="예약 종료일 (YYYY-MM-DD)",
+        ge=FILTER_DATE_MIN,
+        le=FILTER_DATE_MAX,
+    )
     status: TreatmentStatus | None = Field(
         None,
         description="예약 상태 (예약, 대기, 완료, 취소)",
@@ -126,6 +168,8 @@ class TreatmentFilter(BaseModel):
     staff_user_id: int | None = Field(
         None,
         description="시술 담당자 유저 ID",
+        ge=1,
+        le=PG_INT_MAX,
     )
 
 

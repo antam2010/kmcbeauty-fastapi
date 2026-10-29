@@ -3,7 +3,7 @@ from collections import defaultdict
 
 from fastapi import status
 from fastapi_pagination import Page
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.crud.phonebook_crud import (
@@ -48,8 +48,7 @@ def get_phonebook_list_service(
 
     """
     # 매장별 전화번호부 목록 조회 (검색 조건 포함)
-    list = get_phonebooks_by_user(db=db, shop_id=current_shop.id, search=params.search)
-    return list
+    return get_phonebooks_by_user(db=db, shop_id=current_shop.id, search=params.search)
 
 
 def get_phonebook_service(
@@ -127,7 +126,7 @@ def create_phonebook_service(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
             exception=e,
-        )
+        ) from e
     except Exception as e:
         # 그 외 예상치 못한 에러 처리
         db.rollback()
@@ -135,7 +134,7 @@ def create_phonebook_service(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
             exception=e,
-        )
+        ) from e
 
     # 생성된 객체 새로고침하여 최신 정보 반환
     db.refresh(phonebook)
@@ -183,26 +182,32 @@ def update_phonebook_service(
     except SQLAlchemyError as e:
         # 데이터베이스 관련 에러 처리
         db.rollback()
-        logging.exception(f"SQLAlchemyError: {e}")
+        # DataError(입력 값 거절)는 CustomException 이 400 · 경고 로그로 처리한다.
+        if not isinstance(e, DataError):
+            logging.exception("SQLAlchemyError")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
-        )
+        ) from e
     except Exception as e:
         # 그 외 예상치 못한 에러 처리
         db.rollback()
-        logging.exception(f"Unexpected error: {e}")
+        logging.exception("Unexpected error")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
-        )
+        ) from e
 
     # 수정된 객체 새로고침하여 최신 정보 반환
     db.refresh(phonebook)
     return phonebook
 
 
-def delete_phonebook_service(db: Session, phonebook_id: int, current_shop: Shop):
+def delete_phonebook_service(
+    db: Session,
+    phonebook_id: int,
+    current_shop: Shop,
+) -> None:
     """전화번호부 삭제 서비스 (소프트 삭제).
 
     Args:
@@ -231,19 +236,19 @@ def delete_phonebook_service(db: Session, phonebook_id: int, current_shop: Shop)
     except SQLAlchemyError as e:
         # 데이터베이스 관련 에러 처리
         db.rollback()
-        logging.exception(f"SQLAlchemyError occurred while deleting phonebook: {e}")
+        logging.exception("SQLAlchemyError occurred while deleting phonebook")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
-        )
+        ) from e
     except Exception as e:
         # 그 외 예상치 못한 에러 처리
         db.rollback()
-        logging.exception(f"Unexpected error occurred while deleting phonebook: {e}")
+        logging.exception("Unexpected error occurred while deleting phonebook")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
-        )
+        ) from e
 
 
 def get_grouped_by_groupname_service(
@@ -308,7 +313,8 @@ def check_duplicate_phone_number_service(
     Args:
         db: 데이터베이스 세션
         current_shop: 현재 접속한 매장 정보
-        phone_number: 중복 체크할 전화번호
+        phone_number: 중복 체크할 전화번호. 라우터가 생성 경로와 같은 규칙으로 검증 ·
+            정규화한 값(000-0000-0000)이라 저장값과 그대로 비교한다.
 
     Returns:
         DuplicateCheckResponse: 중복 여부 및 정규화된 전화번호
@@ -318,21 +324,21 @@ def check_duplicate_phone_number_service(
     try:
         existing = get_phonebook_by_phone_number(db, phone_number, current_shop.id)
         exists = existing is not None
-        return DuplicateCheckResponse(
-            exists=exists,
-            phone_number=phone_number,
-        )
     except SQLAlchemyError as e:
-        logging.exception(f"SQLAlchemyError during duplicate check: {e}")
+        logging.exception("SQLAlchemyError during duplicate check")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
             exception=e,
-        )
+        ) from e
     except Exception as e:
-        logging.exception(f"Unexpected error during duplicate check: {e}")
+        logging.exception("Unexpected error during duplicate check")
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             domain=DOMAIN,
             exception=e,
-        )
+        ) from e
+    return DuplicateCheckResponse(
+        exists=exists,
+        phone_number=phone_number,
+    )

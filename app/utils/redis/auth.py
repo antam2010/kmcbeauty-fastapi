@@ -1,8 +1,8 @@
-from app.core.config import REFRESH_TOKEN_EXPIRE_SECONDS
+from app.core.config import settings
 from app.core.redis_client import redis_client
 
 REDIS_PREFIX = "auth:refresh"
-REDIS_TTL = REFRESH_TOKEN_EXPIRE_SECONDS
+REDIS_TTL = settings.REFRESH_TOKEN_EXPIRE_SECONDS
 
 
 def _get_refresh_token_key(user_id: int) -> str:

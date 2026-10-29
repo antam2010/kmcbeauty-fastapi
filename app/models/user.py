@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from sqlalchemy import Column, Integer, String
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import relationship
@@ -10,7 +12,7 @@ from app.models.mixin.timestamp import TimestampMixin
 
 class User(Base, SoftDeleteMixin, TimestampMixin):
     __tablename__ = "users"
-    __table_args__ = {"comment": "유저 테이블"}
+    __table_args__: ClassVar[dict] = {"comment": "유저 테이블"}
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(50), nullable=False, unique=True, comment="유저 이메일")

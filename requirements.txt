@@ -1,27 +1,41 @@
-alembic==1.15.1
+alembic==1.18.5
 amqp==5.3.1
 annotated-types==0.7.0
-anyio==4.9.0
-bcrypt==3.2.0
-billiard==4.2.1
+anyio==4.11.0
+# argon2-cffi: 신규 비밀번호 해시의 기본 스킴(argon2id). passlib 1.7.4가
+# argon2 백엔드로 자동 감지한다. argon2-cffi-bindings 는 CFFI 네이티브 바인딩
+# (전이 의존)으로, 이 저장소의 완전 고정 트리 규칙에 맞춰 함께 핀한다.
+argon2-cffi==23.1.0
+argon2-cffi-bindings==21.2.0
+# bcrypt는 5.0.0(최신)로 올리지 않는다. passlib 1.7.4가 bcrypt의 __about__ 속성에
+# 의존하는데 bcrypt 4.1+/5.0에서 제거되어 hash/verify가 런타임에 깨진다.
+# passlib 1.7.4와 호환되는 마지막 안정 버전인 4.0.1로 고정한다.
+# (신규 해시는 argon2. bcrypt는 DB의 레거시 해시 verify 전용으로만 유지한다.)
+bcrypt==4.0.1
+billiard==4.2.2
 CacheControl==0.14.3
 cachetools==6.2.0
-celery==5.5.2
-certifi==2025.1.31
-cffi==1.17.1
+celery==5.6.3
+certifi==2025.10.5
+# cryptography 46.x가 CPython에서 cffi>=2.0.0을 요구하므로 함께 핀을 올린다.
+cffi==2.0.0
 charset-normalizer==3.4.3
 click==8.1.8
 click-didyoumean==0.3.1
 click-plugins==1.1.1
 click-repl==0.3.0
-cryptography==44.0.2
+# coverage: pytest-cov 백엔드. CI 커버리지 리포트에 사용(게이트 없음, SPEC-INFRA-001).
+coverage==7.6.10
+cryptography==46.0.2
+# Deprecated / wrapt: limits 의 전이 의존성(아래 limits 참조).
+Deprecated==3.0.0
 dnspython==2.7.0
 ecdsa==0.19.1
 email_validator==2.2.0
-fastapi==0.115.11
-fastapi-cli==0.0.7
-fastapi-pagination==0.12.34
-firebase_admin==7.1.0
+fastapi==0.139.0
+fastapi-cli==0.0.13
+fastapi-pagination==0.15.15
+firebase_admin==7.5.0
 google-api-core==2.25.1
 google-api-python-client==2.183.0
 google-auth==2.41.1
@@ -32,22 +46,27 @@ google-cloud-storage==3.4.0
 google-crc32c==1.7.1
 google-resumable-media==2.7.2
 googleapis-common-protos==1.70.0
-greenlet==3.1.1
+greenlet==3.2.4
 grpcio==1.75.1
 grpcio-status==1.75.1
-h11==0.14.0
+h11==0.16.0
 h2==4.3.0
 hpack==4.1.0
-httpcore==1.0.7
+# h11 0.16과 호환되도록 핀을 올린다(httpcore<=1.0.8은 h11<0.15 요구).
+httpcore==1.0.9
 httplib2==0.31.0
-httptools==0.6.4
+# uvicorn[standard] 0.49.0이 httptools>=0.8.0을 요구하므로 함께 핀을 올린다.
+httptools==0.8.0
 httpx==0.28.1
 hyperframe==6.1.0
 idna==3.10
 itsdangerous==2.2.0
 Jinja2==3.1.6
-kombu==5.5.3
-Mako==1.3.9
+kombu==5.6.1
+# limits: slowapi 의 저장소 백엔드. 운영은 Redis 저장소(RATE_LIMIT_STORAGE_URI)를 쓰므로
+# slowapi 의 느슨한 하한(limits>=2.3)에 맡기지 않고 검증한 버전으로 고정한다.
+limits==5.8.0
+Mako==1.3.10
 Markdown==3.8
 markdown-it-py==3.0.0
 MarkupSafe==3.0.2
@@ -56,53 +75,65 @@ mdurl==0.1.2
 msgpack==1.1.1
 mypy-extensions==1.0.0
 orjson==3.10.15
-packaging==24.2
+packaging==25.0
 passlib==1.7.4
 pathspec==0.12.1
 platformdirs==4.3.7
 prompt_toolkit==3.0.51
 proto-plus==1.26.1
 protobuf==6.32.1
+# psycopg v3: PostgreSQL 드라이버(SQLAlchemy URL 스킴 postgresql+psycopg://).
+# psycopg-binary 는 libpq 를 동봉한 바이너리 휠이라 시스템 libpq/빌드 도구 없이
+# 설치된다. psycopg[binary] 와 동일하게 두 패키지는 반드시 같은 버전으로 짝을 맞춘다.
+psycopg==3.3.6
+psycopg-binary==3.3.6
 pyasn1==0.6.1
 pyasn1_modules==0.4.2
 pycodestyle==2.13.0
 pycparser==2.22
-pydantic==2.10.6
+pydantic==2.13.4
 pydantic-extra-types==2.10.3
-pydantic-settings==2.8.1
-pydantic_core==2.27.2
+pydantic-settings==2.14.2
+# pydantic_core는 명시적으로 고정하지 않는다. pydantic은 정확히 하나의 pydantic-core
+# 버전과만 동작하며(2.12+ 부터 불일치 시 시작 시점에 오류를 발생시킨다), pydantic이
+# 자신의 core 버전을 정확히 핀하므로 pip 가 해석하도록 맡겨 항상 짝을 맞춘다.
 pyflakes==3.3.2
 Pygments==2.19.1
 PyJWT==2.10.1
-PyMySQL==1.1.1
 pyparsing==3.2.5
+pytest==8.4.2
+# pytest-cov: CI 커버리지 리포트 생성용(--cov-fail-under 게이트는 두지 않음, SPEC-INFRA-001 REQ-INFRA-006).
+pytest-cov==6.1.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
 python-jose==3.5.0
 python-multipart==0.0.20
 PyYAML==6.0.2
-redis==5.2.1
+redis==6.4.0
 requests==2.32.5
 rich==13.9.4
-rich-toolkit==0.13.2
+# fastapi-cli 0.0.13이 rich-toolkit>=0.14.8을 요구하므로 함께 핀을 올린다.
+rich-toolkit==0.14.8
 rsa==4.9
-ruff==0.11.10
-sentry-sdk==2.26.1
+ruff==0.14.0
+sentry-sdk==2.64.0
 shellingham==1.5.4
 six==1.17.0
+slowapi==0.1.10
 sniffio==1.3.1
-SQLAlchemy==2.0.39
+SQLAlchemy==2.0.51
 sqlparse==0.5.3
-starlette==0.46.1
-typer==0.15.2
-typing_extensions==4.12.2
+starlette==1.3.1
+typer==0.20.0
+typing_extensions==4.15.0
 tzdata==2025.2
 ujson==5.10.0
 uritemplate==4.2.0
 urllib3==2.4.0
-uvicorn==0.34.0
+uvicorn==0.49.0
 uvloop==0.21.0
 vine==5.1.0
 watchfiles==1.0.4
 wcwidth==0.2.13
 websockets==15.0.1
+wrapt==2.5.1

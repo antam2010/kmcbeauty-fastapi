@@ -18,7 +18,10 @@ router = APIRouter(prefix="/summary", tags=["통계"])
     "/dashboard",
     response_model=DashboardSummaryResponse,
     summary="대시보드 요약 정보 조회",
-    description="오늘/이번달의 예약 통계, 시술 매출, 고객 인사이트 등을 포함한 대시보드 요약 정보를 조회합니다.",
+    description=(
+        "오늘/이번달의 예약 통계, 시술 매출, 고객 인사이트 등을 포함한 "
+        "대시보드 요약 정보를 조회합니다."
+    ),
     status_code=status.HTTP_200_OK,
     responses={
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
