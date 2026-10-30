@@ -540,6 +540,24 @@ def test_deploy_entry_checks_out_main_commit_then_execs_deploy(
 
 
 @_requires_bash
+def test_deploy_entry_accepts_long_token_with_punctuation(
+    entry_sandbox: _EntrySandbox,
+) -> None:
+    """긴 토큰 · '.' · '-' · '=' 도 받는다.
+
+    GitHub Actions 토큰이 255자를 넘거나 구두점을 포함해 첫 CD 실행이 거부된 회귀.
+    """
+    token = "ghs_" + "A1b2" * 80 + ".eyJ-part_2=="
+
+    result = _run_entry(entry_sandbox, f"deploy {_SHA}", stdin=f"{token}\n")
+
+    assert result.returncode == 0, result.stderr
+    assert _calls(entry_sandbox)[-1] == (
+        f"deploy.sh {_SHA} user=antam2010 token={token} lock_fd=9"
+    )
+
+
+@_requires_bash
 def test_deploy_entry_refuses_commit_not_on_main(
     entry_sandbox: _EntrySandbox,
 ) -> None:

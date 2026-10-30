@@ -47,8 +47,11 @@ main() {
   local token=""
   IFS= read -r -t 30 token || true
   token="${token%$'\r'}"
-  local token_re='^[A-Za-z0-9_]{0,255}$'
-  [[ "$token" =~ $token_re ]] || reject "레지스트리 토큰 형식이 올바르지 않습니다."
+  # 토큰은 docker login 의 stdin 으로만 쓰고 셸에서 해석하지 않으므로, 공백·제어문자 없는 출력 가능
+  # ASCII(LC_ALL=C 의 [:graph:])와 길이 상한만 본다. GitHub Actions 토큰은 255자를 넘고 '.' · '-' ·
+  # '=' 를 포함할 수 있다(영숫자 · '_' 255자 제한으로 첫 CD 실행이 거부됐다).
+  local token_re='^[[:graph:]]*$'
+  [ "${#token}" -le 8192 ] && [[ "$token" =~ $token_re ]] || reject "레지스트리 토큰 형식이 올바르지 않습니다."
 
   # ── [2] 배포 디렉터리 · 잠금 ──
   local deploy_dir="${DEPLOY_DIR:-/srv/server-mini2/web/kmcbeauty-fastapi}"
