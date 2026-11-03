@@ -41,6 +41,8 @@ NET=shared_network_prod
 IMAGE_REPO=ghcr.io/antam2010/kmcbeauty-api
 API=kmcbeauty-api
 WORKERS=(kmcbeauty-celery-worker kmcbeauty-celery-beat)
+# 마이그레이션 전용 일회성 서비스. api 는 고정 IP 라 run 하면 실행 중인 api 와 주소가 겹친다.
+MIGRATE=kmcbeauty-migrate
 SECRETS_DIR=secrets
 # compose.prod.yaml 의 secrets.*.file 과 같아야 한다(tests/test_infra_guards.py 가 대조).
 SECRET_FILES=(secret_key fernet_key database_url redis_url rate_limit_storage_uri firebase_service_account.json)
@@ -207,12 +209,12 @@ docker exec "$PG_CONTAINER" pg_restore -l "$BACKUP_FILE" >/dev/null \
   || die "백업 파일 검증(pg_restore -l) 실패: $BACKUP_FILE" 4
 
 # ── [5] 마이그레이션(upgrade 만 — downgrade 없음) ─────────────────────────
-# 새 이미지의 일회성 컨테이너(--rm, 의존 서비스 없이)로 실행한다. 시크릿·env·네트워크는 api 와 같다.
+# 새 이미지의 일회성 컨테이너(--rm, 의존 서비스 없이)로 실행한다. 시크릿·env·네트워크는 api 와 같고 IP 만 동적이다.
 # 실패하면 컨테이너는 건드리지 않는다(PostgreSQL 은 DDL 이 트랜잭션이라 스키마도 그대로다).
 say "마이그레이션(alembic upgrade head)…"
-compose run --rm --no-deps -T "$API" alembic upgrade head \
+compose run --rm --no-deps -T "$MIGRATE" alembic upgrade head \
   || die "마이그레이션 실패 — 컨테이너는 바꾸지 않았다(백업: ${PG_CONTAINER}:${BACKUP_FILE})" 4
-current="$(compose run --rm --no-deps -T "$API" alembic current 2>&1)" \
+current="$(compose run --rm --no-deps -T "$MIGRATE" alembic current 2>&1)" \
   || { printf '%s\n' "$current" | tail -n 5; die "alembic current 실패" 4; }
 case "$current" in
   *"(head)"*) say "✓ DB 가 head 다" ;;

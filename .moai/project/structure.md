@@ -22,7 +22,7 @@ kmcbeauty-fastapi/
 ├── .github/
 │   └── workflows/        # GitHub Actions (ci.yml, cd.yml)
 ├── celery_app.py         # Celery 애플리케이션 팩토리
-├── compose.prod.yaml     # 운영 compose 프로젝트 kmcbeauty (kmcbeauty-api · -celery-worker · -celery-beat, 외부 bridge shared_network_prod, secrets/ 파일)
+├── compose.prod.yaml     # 운영 compose 프로젝트 kmcbeauty (kmcbeauty-api · -celery-worker · -celery-beat · 일회성 -migrate, 외부 bridge shared_network_prod, secrets/ 파일)
 ├── Dockerfile            # 단일 스테이지 컨테이너 빌드
 ├── requirements.txt      # 의존성 목록 (전이 의존성까지 고정)
 ├── .env.example          # 환경변수 문서화 템플릿 (로컬)

@@ -13,6 +13,10 @@
 #   되므로 `api` 같은 일반 이름을 쓰지 않는다. nginx 는 kmcbeauty-api:8000 으로 프록시한다
 #   (deploy/nginx/api-beauty.conf). 호스트 포트는 공개하지 않는다(ports 없음, expose 만).
 #
+# 고정 IP: 상시 컨테이너 3개는 shared_network_prod 의 앱 대역 고정 IP 로 뜬다(server-mini2 docs/PORTS.md).
+#   동적 IP 면 재부팅 때 인프라 컨테이너의 고정 IP 를 먼저 가져가 그 시작을 막는다(2026-11-03 장애).
+#   공개 저장소에 사설 IP 를 적지 않는 원칙의 유일한 예외다 — 가드 테스트가 ipv4_address 줄만 허용한다.
+#
 # 이미지 태그 (REQ-INFRA-003, 불변 태그):
 #   - `${IMAGE_TAG:?...}` 필수 — 미지정이면 config/up 이 즉시 실패한다. 운영은 커밋 SHA 태그만 쓴다.
 #   - 가변 `latest` 태그는 절대 사용하지 않는다.
@@ -21,7 +25,7 @@
 #
 # 환경 변수 (REQ-INFRA-001):
 #   - 비시크릿은 `.env.prod`(env_file). FORWARDED_ALLOW_IPS = shared_network_prod 에서의 nginx
-#     컨테이너 IP — deploy.sh 가 docker inspect 값과 같은지 검사한다(IP 는 저장소에 적지 않는다).
+#     컨테이너 IP — deploy.sh 가 docker inspect 값과 같은지 검사한다(nginx IP 는 저장소에 적지 않는다).
 #
 # 시크릿 (compose file secrets):
 #   - 서버의 ./secrets/<파일> 을 컨테이너 /run/secrets/<target> 에 읽기 전용 bind mount 한다.
@@ -33,7 +37,7 @@
 # ==============================================================================
 name: kmcbeauty
 
-# 세 서비스가 공유하는 설정(이미지 · 재시작 · env · 네트워크 · 로그 회전).
+# 서비스가 공유하는 설정(이미지 · 재시작 · env · 로그 회전). 네트워크는 IP 가 서비스마다 달라 각 서비스에 둔다.
 x-kmcbeauty-common: &kmcbeauty-common
   image: ${IMAGE_TAG:?scripts/deploy.sh 가 불변 커밋 SHA 태그로 export 한다}
   restart: unless-stopped
@@ -45,8 +49,6 @@ x-kmcbeauty-common: &kmcbeauty-common
     FIREBASE_SERVICE_ACCOUNT_KEY_PATH: /run/secrets/firebase_service_account
     # 컨테이너 로깅은 stdout 단일화(docker logs 로 수집) — 파일 로그 비활성.
     LOG_TO_FILE: "false"
-  networks:
-    - shared_network_prod
   # 로그 회전 — 서버 인프라(server-mini2)의 다른 서비스와 같은 json-file 10m × 3.
   logging:
     driver: json-file
@@ -62,9 +64,12 @@ services:
     <<: *kmcbeauty-common
     container_name: kmcbeauty-api
     # command 미지정 → 이미지 CMD(uvicorn :8000) 사용. 포트 정의는 Dockerfile 한 곳으로 일원화.
+    networks:
+      shared_network_prod:
+        ipv4_address: 172.20.0.20
     expose:
       - "8000"
-    secrets:
+    secrets: &kmcbeauty-api-secrets
       # target(컨테이너 파일명) = Settings 필드명 → /run/secrets/<필드명>.
       - source: firebase_service_account
         target: firebase_service_account
@@ -88,6 +93,9 @@ services:
     container_name: kmcbeauty-celery-worker
     # 동시성 2: 서버 자원이 작고(기본값은 CPU 수) 30분 주기 태스크 하나라 충분하다.
     command: celery -A celery_app worker --loglevel=info --concurrency=2
+    networks:
+      shared_network_prod:
+        ipv4_address: 172.20.0.21
     secrets:
       - source: firebase_service_account
         target: firebase_service_account
@@ -111,6 +119,9 @@ services:
     <<: *kmcbeauty-common
     container_name: kmcbeauty-celery-beat
     command: celery -A celery_app beat --loglevel=info
+    networks:
+      shared_network_prod:
+        ipv4_address: 172.20.0.22
     secrets:
       # beat 는 celery_app 로드 시 app.core.firebase 를 전이 import 하므로 같은 시크릿을 받는다.
       - source: firebase_service_account
@@ -126,6 +137,23 @@ services:
     healthcheck:
       disable: true
     mem_limit: 256m
+
+  # --- 마이그레이션(일회성) ---------------------------------------------------
+  # deploy.sh 가 `compose run --rm` 으로만 쓴다. profile 이 있어 `up` 은 띄우지 않는다.
+  # `compose run` 은 서비스의 ipv4_address 를 물려받으므로, 실행 중인 kmcbeauty-api 로 run 하면
+  # 주소가 겹쳐 "Address already in use" 로 실패한다. 그래서 고정 IP 없는 서비스를 따로 둔다.
+  kmcbeauty-migrate:
+    <<: *kmcbeauty-common
+    container_name: kmcbeauty-migrate
+    profiles:
+      - oneoff
+    # 동적 IP 로 붙는다(비어 있는 가장 낮은 주소). --rm 이라 끝나면 바로 반납한다.
+    networks:
+      - shared_network_prod
+    secrets: *kmcbeauty-api-secrets
+    healthcheck:
+      disable: true
+    mem_limit: 512m
 
 networks:
   # 서버 인프라(server-mini2)의 외부 bridge 네트워크. 공유 nginx(고정 IP) · postgresql · redis 가

@@ -8,7 +8,9 @@
 - 이미지는 `${IMAGE_TAG:?...}` 로 필수 주입하고 메모리 상한 · 재시작 · 로그 회전이 있다.
 - 시크릿 파일 → target(Settings 필드명) 매핑이 정해진 대로이고
   `scripts/deploy.sh` 의 파일 목록과 같다. `/secrets/` 는 git 이 무시한다.
-- 공개 저장소라 배포 산출물에 사설 IPv4 를 적지 않는다.
+- 상시 컨테이너는 고정 IP 로 뜨고, 마이그레이션은 고정 IP 없는 일회성 서비스로 돈다
+  (2026-11-03 재부팅 장애 재발 방지).
+- 공개 저장소라 배포 산출물에 사설 IPv4 를 적지 않는다(예외: compose 의 앱 고정 IP 줄).
 - `scripts/*.sh` 는 실행 가능해야 한다(첫 배포 차단 이슈 재발 방지).
 - `cd.yml` 은 서드파티 SSH 액션 없이 OpenSSH + 고정 호스트 키로 배포한다.
 - `scripts/deploy_entry.sh`(SSH 강제 명령)는 형식이 틀린 요청을 git·docker·파일을
@@ -66,6 +68,14 @@ NETWORK = "shared_network_prod"
 API = "kmcbeauty-api"
 WORKER = "kmcbeauty-celery-worker"
 BEAT = "kmcbeauty-celery-beat"
+MIGRATE = "kmcbeauty-migrate"
+# 상시 컨테이너의 shared_network_prod 고정 IP(server-mini2 docs/PORTS.md 의 앱 대역).
+# 동적 IP 면 재부팅 때 인프라 컨테이너의 고정 IP 를 먼저 가져가 그 시작을 막는다.
+EXPECTED_FIXED_IPS = {
+    API: "172.20.0.20",
+    WORKER: "172.20.0.21",
+    BEAT: "172.20.0.22",
+}
 FIREBASE_TARGET = "firebase_service_account"
 # Settings 필드명 = 시크릿 target. .env.prod 에 두면 env 가 /run/secrets 를 덮어쓴다.
 SECRET_FIELDS = (
@@ -90,18 +100,20 @@ EXPECTED_SECRETS = {
         FIREBASE_TARGET,
     ),
 }
-# 서비스별로 마운트해야 하는 시크릿 target(rate limit 저장소는 api 만).
+# 서비스별로 마운트해야 하는 시크릿 target(rate limit 저장소는 api · migrate 만).
 EXPECTED_SECRET_TARGETS = {
     API: {FIREBASE_TARGET, *SECRET_FIELDS},
     WORKER: {FIREBASE_TARGET, *SECRET_FIELDS} - {"RATE_LIMIT_STORAGE_URI"},
     BEAT: {FIREBASE_TARGET, *SECRET_FIELDS} - {"RATE_LIMIT_STORAGE_URI"},
+    MIGRATE: {FIREBASE_TARGET, *SECRET_FIELDS},
 }
-EXPECTED_MEM_LIMITS = {API: "512m", WORKER: "512m", BEAT: "256m"}
+EXPECTED_MEM_LIMITS = {API: "512m", WORKER: "512m", BEAT: "256m", MIGRATE: "512m"}
 # 오류 메시지에 '-' 를 허용하지 않는다: docker CLI(stack)의 치환은 '-'(기본값) 규칙을
 # ':?' 보다 먼저 적용해 "${IMAGE_TAG:?a-b}" 를 기본값 "b" 로 바꾼다
 # (미지정이어도 렌더가 성공해 버린다). compose v2 는 영향이 없지만 안전하게 둔다.
 IMAGE_TAG_PATTERN = re.compile(r"\$\{IMAGE_TAG:\?[^}\-]+\}")
-# 사설 IPv4(10/8, 172.16/12, 192.168/16). 서버 내부 주소는 시크릿·서버 파일에만 둔다.
+# 사설 IPv4(10/8, 172.16/12, 192.168/16). 서버 내부 주소는 시크릿·서버 파일에만 둔다
+# (예외: compose 의 앱 고정 IP 줄 — test_no_private_ipv4_in_public_deploy_artifacts).
 PRIVATE_IPV4 = re.compile(
     r"\b(?:10(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}"
     r"|192\.168(?:\.\d{1,3}){2})\b",
@@ -128,6 +140,14 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 def _services() -> dict[str, dict[str, Any]]:
     return _load_yaml(COMPOSE_FILE)["services"]
+
+
+def _fixed_ip(service: dict[str, Any]) -> str | None:
+    """서비스의 shared_network_prod 고정 IP(없으면 None)."""
+    networks = service.get("networks")
+    if not isinstance(networks, dict):
+        return None
+    return (networks.get(NETWORK) or {}).get("ipv4_address")
 
 
 def test_no_latest_tag_in_deployment_artifacts() -> None:
@@ -166,6 +186,42 @@ def test_compose_uses_only_external_shared_network_prod() -> None:
         assert "network_mode" not in service, name
 
 
+def test_compose_app_services_use_fixed_ips() -> None:
+    """상시 컨테이너는 정해진 고정 IP 로 뜬다.
+
+    2026-11-03 재부팅 때 동적 IP 인 앱 컨테이너가 nginx 등 인프라 컨테이너의
+    고정 IP 를 먼저 가져가, 그들이 "Address already in use" 로 시작하지 못했다.
+    """
+    services = _services()
+
+    assert {name: _fixed_ip(services[name]) for name in EXPECTED_FIXED_IPS} == (
+        EXPECTED_FIXED_IPS
+    )
+
+
+def test_deploy_runs_oneoffs_only_on_services_without_fixed_ip() -> None:
+    """`compose run` 대상은 고정 IP 가 없는 서비스뿐이다.
+
+    `compose run` 은 서비스의 ipv4_address 를 물려받는다. 고정 IP 서비스로 run 하면
+    실행 중인 컨테이너와 주소가 겹쳐 "Address already in use" 로 배포가 멈춘다.
+    """
+    services = _services()
+    deploy = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    service_of = dict(re.findall(r"^(\w+)=(kmcbeauty-[\w-]+)$", deploy, re.MULTILINE))
+    run_targets = re.findall(r'compose run\b[^\n]*?"\$(\w+)"', deploy)
+
+    # profile 이 있어 `up` 은 띄우지 않고, `compose run` 으로 지정할 때만 쓴다.
+    assert services[MIGRATE]["profiles"] == ["oneoff"]
+    assert _fixed_ip(services[MIGRATE]) is None
+    assert run_targets, "scripts/deploy.sh 에 마이그레이션 compose run 이 없습니다."
+    for variable in run_targets:
+        assert service_of[variable] == MIGRATE, variable
+    # 문서의 수동 명령도 같다(복사해 실행하면 같은 충돌이 난다).
+    docs = (REPO_ROOT / "docs" / "deployment.md").read_text(encoding="utf-8")
+    for name in EXPECTED_FIXED_IPS:
+        assert f"--no-deps -T {name}" not in docs, name
+
+
 def test_compose_publishes_no_host_ports() -> None:
     """호스트 포트는 공개하지 않는다 — 유입은 공유 nginx 뿐(api 는 expose 8000)."""
     services = _services()
@@ -178,7 +234,7 @@ def test_compose_service_and_container_names_are_prefixed() -> None:
     """서비스 이름 = container_name = kmcbeauty-* (공유 네트워크의 DNS 별칭이 된다)."""
     services = _services()
 
-    assert set(services) == {API, WORKER, BEAT}
+    assert set(services) == {API, WORKER, BEAT, MIGRATE}
     for name, service in services.items():
         assert name.startswith("kmcbeauty-"), name
         assert service["container_name"] == name
@@ -230,10 +286,11 @@ def test_compose_memory_limits_and_runtime_settings() -> None:
             "driver": "json-file",
             "options": {"max-size": "10m", "max-file": "3"},
         }, name
-    # api 는 이미지의 HEALTHCHECK(curl /health)를 쓰고, celery 는 그것을 끈다.
+    # api 는 이미지의 HEALTHCHECK(curl /health)를 쓰고, celery · migrate 는 그것을 끈다.
     assert "healthcheck" not in services[API]
     assert services[WORKER]["healthcheck"] == {"disable": True}
     assert services[BEAT]["healthcheck"] == {"disable": True}
+    assert services[MIGRATE]["healthcheck"] == {"disable": True}
     assert "--concurrency=2" in services[WORKER]["command"]
 
 
@@ -288,13 +345,21 @@ def test_secrets_dir_is_gitignored() -> None:
 
 
 def test_no_private_ipv4_in_public_deploy_artifacts() -> None:
-    """공개 저장소의 배포 산출물에 사설 IPv4(서버 내부 주소)가 없다."""
+    """공개 저장소의 배포 산출물에 사설 IPv4(서버 내부 주소)가 없다.
+
+    예외는 compose.prod.yaml 의 앱 고정 IP 줄뿐이다(주석 · 다른 주소는 허용 안 함).
+    """
+    allowed_compose_lines = {
+        f"ipv4_address: {ip}" for ip in EXPECTED_FIXED_IPS.values()
+    }
     offenders = []
     for path in PUBLIC_DEPLOY_ARTIFACTS:
         for lineno, line in enumerate(
             path.read_text(encoding="utf-8").splitlines(),
             start=1,
         ):
+            if path == COMPOSE_FILE and line.strip() in allowed_compose_lines:
+                continue
             if PRIVATE_IPV4.search(line):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
 
