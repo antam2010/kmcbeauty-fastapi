@@ -134,12 +134,15 @@ API 문서: `/docs` · `/redoc` · `/openapi.json` · `/changelog` 는 `APP_ENV=
 
 | 서비스 = container_name | 메모리 상한 | 네트워크 | 비고 |
 |--------|------|---------|------|
-| `kmcbeauty-api` | 512m | `shared_network_prod` | expose `:8000`(호스트 포트 없음). 헬스체크는 이미지(curl /health) |
-| `kmcbeauty-celery-worker` | 512m | `shared_network_prod` | `--concurrency=2`, 헬스체크 끔 |
-| `kmcbeauty-celery-beat` | 256m | `shared_network_prod` | 단일 인스턴스(중복 디스패치 방지), 헬스체크 끔 |
+| `kmcbeauty-api` | 512m | `shared_network_prod`(고정 IP) | expose `:8000`(호스트 포트 없음). 헬스체크는 이미지(curl /health) |
+| `kmcbeauty-celery-worker` | 512m | `shared_network_prod`(고정 IP) | `--concurrency=2`, 헬스체크 끔 |
+| `kmcbeauty-celery-beat` | 256m | `shared_network_prod`(고정 IP) | 단일 인스턴스(중복 디스패치 방지), 헬스체크 끔 |
+| `kmcbeauty-migrate` | 512m | `shared_network_prod`(동적 IP) | 마이그레이션 일회성. profile `oneoff` 라 `up` 이 띄우지 않고 `deploy.sh` 가 `run --rm` 으로 실행 |
 
 - 네트워크는 서버 인프라의 외부 bridge `shared_network_prod` 하나뿐이다. 공유 nginx(고정 IP) · `postgresql` · `redis` 가
   같은 네트워크에 있어 컨테이너 이름으로 닿는다. 서비스 이름 = container_name 이라 `api` 같은 일반 별칭이 생기지 않는다.
+- 상시 컨테이너 3개는 고정 IP 다(값은 `compose.prod.yaml`). 동적 IP 면 재부팅 때 인프라 컨테이너의 고정 IP 를 먼저 가져간다(2026-11-03 장애).
+  `compose run` 은 고정 IP 를 물려받아 실행 중인 컨테이너와 충돌하므로, 일회성 작업은 고정 IP 없는 `kmcbeauty-migrate` 로 돌린다.
 - 외부 포트 노출 없음: 공유 nginx 가 `kmcbeauty-api:8000` 으로 프록시한다(resolver + 변수 proxy_pass, 원본 `deploy/nginx/api-beauty.conf`).
 - 전용 Redis 없음: 공유 Redis DB 5(캐시 · 리프레시 토큰 · Celery 브로커/결과), DB 6(rate limit). 비밀번호 필수.
 - 프록시 신뢰: `.env.prod` 의 `FORWARDED_ALLOW_IPS` = `shared_network_prod` 에서의 nginx IP(`deploy.sh` 가 `docker inspect` 값과 비교).

@@ -20,11 +20,12 @@ KMCBeauty API 의 운영 배포(단일 서버 · docker compose) · CI/CD · 시
 - **공개 저장소다.** 서버 호스트 이름 · SSH 포트 · 계정 · IP · 서브넷은 저장소에 쓰지 않는다(GitHub 시크릿,
   서버의 `.env.prod` · `secrets/` 에만 둔다). 이 문서의 `<ssh-host>` `<ssh-port>` `<deploy-user>` `<password>` 는
   자리표시자다. Actions 로그도 공개이므로 배포 스크립트는 IP · 서브넷 · 앱 로그(클라이언트 IP)를 출력하지 않는다.
+  유일한 예외는 `compose.prod.yaml` 의 앱 고정 IP 줄이다(가드 테스트가 이 줄만 허용한다).
 
 | 서버 구성 | 값 |
 |---|---|
-| 네트워크 | 외부 bridge `shared_network_prod` (서버 인프라가 관리 — 이 프로젝트는 만들거나 지우지 않는다). nginx 는 고정 IP 로, `postgresql` · `redis` 는 컨테이너 이름으로 닿는다 |
-| 컨테이너 | `kmcbeauty-api`(expose 8000, 512m) · `kmcbeauty-celery-worker`(동시성 2, 512m) · `kmcbeauty-celery-beat`(256m). 서비스 이름 = container_name — 공유 네트워크에 `api` 같은 일반 별칭을 만들지 않는다 |
+| 네트워크 | 외부 bridge `shared_network_prod` (서버 인프라가 관리 — 이 프로젝트는 만들거나 지우지 않는다). nginx 는 고정 IP 로, `postgresql` · `redis` 는 컨테이너 이름으로 닿는다. 상시 컨테이너 3개도 고정 IP 로 뜬다(값은 `compose.prod.yaml`) — 동적 IP 면 재부팅 때 인프라 컨테이너의 고정 IP 를 먼저 가져가 그 시작을 막는다(2026-11-03 장애) |
+| 컨테이너 | `kmcbeauty-api`(expose 8000, 512m) · `kmcbeauty-celery-worker`(동시성 2, 512m) · `kmcbeauty-celery-beat`(256m) · `kmcbeauty-migrate`(마이그레이션 일회성, 512m — `up` 이 띄우지 않는다). 서비스 이름 = container_name — 공유 네트워크에 `api` 같은 일반 별칭을 만들지 않는다 |
 | 호스트 포트 | 없음(`ports:` 없음). 유입은 공유 nginx 뿐 |
 | DB | 공유 `postgresql` 의 DB `kmcbeauty` + role `kmcbeauty` (운영자가 생성 — 코드가 만들지 않는다) |
 | Redis | 공유 `redis` DB 5(캐시 · 리프레시 토큰 · Celery 브로커/결과) · DB 6(rate limit). `maxmemory 256mb` + `noeviction` 이라 가득 차면 쓰기가 거부된다 |
@@ -74,7 +75,7 @@ KMCBeauty API 의 운영 배포(단일 서버 · docker compose) · CI/CD · 시
 | `rate_limit_storage_uri` | `RATE_LIMIT_STORAGE_URI` | `redis://:<password>@redis:6379/6` | api |
 | `firebase_service_account.json` | `firebase_service_account` | FCM 서비스 계정 키 JSON. 실제 키 전에는 `{}` | api · worker · beat |
 
-- 마이그레이션(`docker compose run … kmcbeauty-api`)도 api 와 같은 시크릿을 받는다.
+- 마이그레이션(`docker compose run … kmcbeauty-migrate`)도 api 와 같은 시크릿을 받는다.
 - Redis URL 도 시크릿이다. 공유 Redis 는 비밀번호가 필수라 URL 에 자격 증명이 들어간다.
 - Firebase 키 경로(`FIREBASE_SERVICE_ACCOUNT_KEY_PATH=/run/secrets/firebase_service_account`)는
   `compose.prod.yaml` 이 고정한다. `{}` 이면 Firebase 초기화만 실패(오류 로그)하고 API · worker · beat 는
@@ -161,15 +162,18 @@ expand/contract 2단계 규칙(1 릴리스 윈도우):
 
 ### 실행 방식
 
-새 이미지의 일회성 컨테이너로 실행한다. api 서비스 정의(시크릿 · `.env.prod` · `shared_network_prod`)를 그대로
-쓰므로 `DATABASE_URL` 의 호스트 `postgresql` 이 그대로 해석된다. 실행 중인 `kmcbeauty-api` 와 이름이 겹치지 않는다
-(compose 가 `kmcbeauty-kmcbeauty-api-run-<id>` 로 만든다).
+새 이미지의 일회성 컨테이너로 실행한다. 전용 서비스 `kmcbeauty-migrate` 는 시크릿 · `.env.prod` · `shared_network_prod` 가
+api 와 같아 `DATABASE_URL` 의 호스트 `postgresql` 이 그대로 해석된다. profile(`oneoff`)이 있어 `up` 은 이 서비스를 띄우지
+않는다. 컨테이너 이름은 compose 가 `kmcbeauty-kmcbeauty-migrate-run-<id>` 로 만든다.
+
+`kmcbeauty-api` 로 `run` 하지 않는다. `compose run` 은 서비스의 고정 IP 를 물려받아, 실행 중인 api 와 주소가 겹치고
+`Address already in use` 로 실패한다. `kmcbeauty-migrate` 는 고정 IP 가 없어 동적 IP 로 붙고 끝나면 반납한다.
 
 ```bash
 # 서버(배포 디렉터리)에서 — 보통은 deploy.sh 가 실행한다
 export IMAGE_TAG=ghcr.io/antam2010/kmcbeauty-api:<sha>
-docker compose -p kmcbeauty -f compose.prod.yaml run --rm --no-deps -T kmcbeauty-api alembic upgrade head
-docker compose -p kmcbeauty -f compose.prod.yaml run --rm --no-deps -T kmcbeauty-api alembic current   # "(head)" 포함
+docker compose -p kmcbeauty -f compose.prod.yaml run --rm --no-deps -T kmcbeauty-migrate alembic upgrade head
+docker compose -p kmcbeauty -f compose.prod.yaml run --rm --no-deps -T kmcbeauty-migrate alembic current   # "(head)" 포함
 ```
 
 `deploy.sh` 는 `alembic current` 출력에 `(head)` 가 없으면 종료 코드 4 로 멈추고 컨테이너를 바꾸지 않는다.
@@ -567,7 +571,7 @@ DEPLOY_SSH_KEY_FILE=~/.ssh/kmcbeauty_cd DEPLOY_SSH_KNOWN_HOSTS_FILE=~/.ssh/kmcbe
 | 표 | 추가할 줄 |
 |---|---|
 | 도메인 → 업스트림 | `api-beauty.dongri.kr` · `api-beauty.conf` · `kmcbeauty-api:8000` (resolver 재해석) · JWT(앱) |
-| 컨테이너 내부 포트 · 고정 IP (`shared_network_prod`) | `kmcbeauty-api` · 동적 · 8000 · web/kmcbeauty-fastapi (`compose.prod.yaml`) / `kmcbeauty-celery-worker` · `kmcbeauty-celery-beat` · 동적 · — · 같은 프로젝트 |
+| 컨테이너 내부 포트 · 고정 IP (`shared_network_prod`) | `kmcbeauty-api` · 고정(값은 `compose.prod.yaml`) · 8000 · web/kmcbeauty-fastapi (`compose.prod.yaml`) / `kmcbeauty-celery-worker` · `kmcbeauty-celery-beat` · 고정 · — · 같은 프로젝트 |
 | Redis DB | `5` kmcbeauty 캐시 · 리프레시 토큰 · Celery 브로커/결과 / `6` kmcbeauty rate limit |
 
 ### (i) 병합 → CD → 검증
