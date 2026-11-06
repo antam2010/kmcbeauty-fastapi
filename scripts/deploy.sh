@@ -8,7 +8,8 @@
 #   git checkout --detach <sha> && scripts/deploy.sh <sha>
 #
 # 순서: 잠금 → 전제 검사 → 이미지 pull → 직전 이미지 기록 → DB 백업(pg_dump) → 마이그레이션(upgrade 만)
-#       → docker compose up -d --wait → 상태 확인 → 스모크 → 요약(롤백 명령 안내)
+#       → docker compose up -d --wait → 상태 확인 → 스모크 → 정리(덤프 · 이미지 보존 개수)
+#       → 요약(롤백 명령 안내)
 #   서버 상태를 바꾸는 단계(백업부터)는 전제 검사를 모두 통과해야 시작한다.
 #   compose 는 바뀐 컨테이너를 멈추고 다시 만든다 — api 는 재생성 동안 잠깐(수 초) 응답하지 않는다.
 #   같은 태그를 다시 배포하면 바뀐 것이 없어 컨테이너를 그대로 둔다(시크릿 교체는 docs 9절).
@@ -22,6 +23,7 @@
 #   PG_CONTAINER     공유 PostgreSQL 컨테이너(기본 postgresql)
 #   PG_DB            백업 대상 DB(기본 kmcbeauty)
 #   NGINX_CONTAINER  공유 nginx 컨테이너(기본 nginx — FORWARDED_ALLOW_IPS 비교와 내부 스모크)
+#   KEEP_DUMPS       남길 이 DB 의 덤프 개수(기본 10, 1 이상). 이미지는 현재 · 직전만 남긴다.
 #
 # 종료 코드: 0 성공 / 2 전제 실패 / 3 이미지 pull 실패 / 4 백업·마이그레이션 실패
 #           / 5 기동 실패(up --wait · 상태 확인) / 6 스모크 실패
@@ -56,6 +58,7 @@ PG_CONTAINER="${PG_CONTAINER:-postgresql}"
 PG_DB="${PG_DB:-kmcbeauty}"
 PG_BACKUP_DIR=/var/lib/postgresql/backup
 NGINX_CONTAINER="${NGINX_CONTAINER:-nginx}"
+KEEP_DUMPS="${KEEP_DUMPS:-10}"
 
 # 직전에 돌던 api 이미지(롤백 안내용) — 5단계에서 채운다.
 PREV_IMAGE=""
@@ -98,6 +101,7 @@ for v in "$PG_CONTAINER" "$PG_DB" "$NGINX_CONTAINER"; do
 done
 case "$SMOKE_URL" in "" | https://* | http://*) ;; *) die "SMOKE_URL 은 http(s):// 로 시작하거나 비어야 한다" 2 ;; esac
 [[ "$REGISTRY_USER" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || die "REGISTRY_USER 형식 오류" 2
+[[ "$KEEP_DUMPS" =~ ^[1-9][0-9]*$ ]] || die "KEEP_DUMPS 는 1 이상의 정수여야 한다" 2
 
 cd "$(dirname "$0")/.."
 
@@ -262,7 +266,15 @@ else
   say "외부 스모크 생략(SMOKE_URL 빈 값)"
 fi
 
-# ── [8] 요약 ────────────────────────────────────────────────────────────────
+# ── [8] 정리(실패해도 배포는 성공으로 둔다) ────────────────────────────────
+# 덤프는 이 DB 의 것만 최신 KEEP_DUMPS 개, 이미지는 현재 · 직전(롤백용)만 남긴다.
+say "정리: 덤프 최신 ${KEEP_DUMPS}개 · 이미지 현재+직전 유지"
+if ! bash scripts/prune_artifacts.sh "$PG_CONTAINER" "$PG_BACKUP_DIR" "$PG_DB" "$KEEP_DUMPS" \
+  "$IMAGE_REPO" "$IMAGE" "$PREV_IMAGE"; then
+  say "! 정리 일부 실패 — 배포는 완료됐다. 위 메시지를 보고 수동으로 정리한다"
+fi
+
+# ── [9] 요약 ────────────────────────────────────────────────────────────────
 docker ps --filter "label=com.docker.compose.project=${PROJECT}" --format '  {{.Names}}  {{.Image}}  {{.Status}}'
 say "✓ 배포 완료 $IMAGE"
 echo "백업: ${PG_CONTAINER}:${BACKUP_FILE}"
