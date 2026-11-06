@@ -237,6 +237,7 @@ docker compose -p kmcbeauty -f compose.prod.yaml run --rm --no-deps -T kmcbeauty
 | 마이그레이션 | 5절. 실패하거나 `(head)` 가 아니면 컨테이너는 그대로 |
 | 기동 | `up -d --remove-orphans --wait --wait-timeout 180` → api `healthy` · 세 컨테이너 `running` · 모두 이번 이미지 |
 | 스모크 | `docker exec nginx wget -qO- -T 10 http://kmcbeauty-api:8000/health`, 이어서 외부 `curl -fsS https://api-beauty.dongri.kr/health` (`SMOKE_URL` 로 변경, 빈 값이면 생략). 각 6회까지 재시도 |
+| 정리 | `scripts/prune_artifacts.sh` — `kmcbeauty-<YYYYMMDD-HHMMSS>.dump` 는 최신 `KEEP_DUMPS`(기본 10)개만, `kmcbeauty-api:<sha>` 이미지는 현재 · 직전만 남긴다. 다른 앱 파일은 건드리지 않고, 실패해도 배포는 성공으로 둔다 |
 | 요약 | 컨테이너 · 이미지 · 백업 파일, 롤백 명령(직전 sha · 직전 이미지) |
 
 종료 코드(deploy.sh — 강제 명령을 거쳐 CD 잡의 종료 코드가 된다):
@@ -615,4 +616,4 @@ docker exec postgresql pg_restore -U postgres -d kmcbeauty --clean --if-exists \
 docker compose -p kmcbeauty start
 ```
 
-- 백업 파일은 배포마다 쌓인다. 보존 기간은 server-mini2 의 백업 운영에 맞춰 정리한다.
+- 백업 파일은 배포마다 하나씩 생기고, 배포가 끝나면 최신 `KEEP_DUMPS`(기본 10)개만 남는다. 더 오래 보관하려면 그 전에 다른 곳으로 옮긴다(지운 덤프는 복구할 수 없다).
