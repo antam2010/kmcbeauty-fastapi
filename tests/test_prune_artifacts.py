@@ -10,6 +10,7 @@
 - `docker rmi IMG` → 호출을 STUB_LOG 에 남기고, STUB_RMI_FAIL 과 같으면 실패한다.
 """
 
+import os
 import shutil
 import subprocess
 import sys
@@ -147,12 +148,52 @@ def test_removes_only_old_sha_images(sandbox: _Sandbox) -> None:
     assert sorted(calls) == sorted(f"rmi {img}" for img in OLD)
 
 
-def test_first_deploy_without_prev_keeps_current(sandbox: _Sandbox) -> None:
-    """직전 이미지가 없으면(첫 배포) 현재 이미지만 남긴다."""
+@pytest.mark.parametrize("prev", [None, "", CUR], ids=["no-arg", "empty", "same-sha"])
+def test_unknown_or_same_prev_keeps_all_images(
+    sandbox: _Sandbox,
+    prev: str | None,
+) -> None:
+    """직전 이미지를 모르거나 현재와 같으면(같은 sha 재배포) 이미지를 지우지 않는다."""
     sandbox.images.write_text(f"{CUR}\n{OLD[0]}\n", encoding="utf-8")
 
-    assert _run(sandbox, prev=None).returncode == 0
-    assert sandbox.log.read_text(encoding="utf-8").splitlines() == [f"rmi {OLD[0]}"]
+    assert _run(sandbox, prev=prev).returncode == 0
+    assert sandbox.log.read_text(encoding="utf-8") == ""
+
+
+def test_keep_one_keeps_newest_and_ignores_dump_named_dirs(sandbox: _Sandbox) -> None:
+    """keep=1 이면 최신 덤프만 남는다. 덤프 이름의 디렉터리와 그 안은 그대로 둔다."""
+    for d in (1, 2, 3):
+        (sandbox.backup / _dump(d)).write_text("x", encoding="utf-8")
+    trap = sandbox.backup / _dump(31)  # 최신 이름이지만 디렉터리
+    trap.mkdir()
+    (trap / "victim").write_text("x", encoding="utf-8")
+    (sandbox.backup / "victim").write_text("x", encoding="utf-8")
+
+    assert _run(sandbox, keep="1").returncode == 0
+    assert {p.name for p in sandbox.backup.iterdir()} == {_dump(3), trap.name, "victim"}
+    assert (trap / "victim").exists()
+
+
+def test_missing_backup_dir_reports_failure(sandbox: _Sandbox) -> None:
+    """덤프 디렉터리가 없으면 종료 코드 1(배포 쪽은 경고만 낸다)."""
+    sandbox.backup.rmdir()
+
+    assert _run(sandbox).returncode == 1
+
+
+@pytest.mark.skipif(
+    getattr(os, "geteuid", lambda: -1)() == 0,
+    reason="root 는 쓰기 금지 디렉터리에서도 지울 수 있다",
+)
+def test_rm_failure_reports_failure(sandbox: _Sandbox) -> None:
+    """지우지 못한 덤프가 있으면(권한) 종료 코드 1 로 알린다."""
+    for d in range(1, 13):
+        (sandbox.backup / _dump(d)).write_text("x", encoding="utf-8")
+    sandbox.backup.chmod(0o555)
+    try:
+        assert _run(sandbox).returncode == 1
+    finally:
+        sandbox.backup.chmod(0o755)
 
 
 def test_rmi_failure_reports_but_continues(sandbox: _Sandbox) -> None:
@@ -182,3 +223,13 @@ def test_deploy_calls_prune_after_smoke_and_tolerates_failure() -> None:
 
     assert smoke < prune < deploy.index("[9] 요약")
     assert "if ! bash scripts/prune_artifacts.sh" in deploy
+    call = " ".join(deploy[prune:].split("\n", 2)[:2]).replace("\\", " ")
+    assert call.split()[1:8] == [
+        '"$PG_CONTAINER"',
+        '"$PG_BACKUP_DIR"',
+        '"$PG_DB"',
+        '"$KEEP_DUMPS"',
+        '"$IMAGE_REPO"',
+        '"$IMAGE"',
+        '"$PREV_IMAGE";',
+    ]

@@ -9,8 +9,11 @@
 #    (<db>-YYYYMMDD-HHMMSS.dump, deploy.sh 4단계 형식)만 이름(=시각) 역순으로 세어
 #    최신 <keep_dumps> 개를 남기고 지운다. 다른 앱 · 다른 형식의 파일은 건드리지 않는다.
 #    지운 덤프는 복구할 수 없다.
+#    덤프 이름의 시각 순서를 최신으로 본다 — 같은 형식의 수동 덤프는 서버 시각(deploy.sh 와 같은
+#    시계)으로 만든다.
 # 2) API 이미지: <image_repo>:<40자 sha> 태그 중 현재 · 직전(롤백용) 이미지만 남긴다.
-#    지워도 GHCR 에서 다시 받을 수 있다. 컨테이너가 쓰는 이미지는 docker rmi 가 거절한다.
+#    직전 이미지가 없거나 현재와 같으면 지우지 않는다. 지워도 GHCR 에서 다시 받을 수 있다.
+#    컨테이너가 쓰는 이미지는 docker rmi 가 거절한다.
 #
 # 종료 코드: 0 성공 / 1 일부 실패 / 2 인자 오류
 # ==============================================================================
@@ -41,14 +44,22 @@ rc=0
 # ── 1) DB 덤프 ───────────────────────────────────────────────────────────────
 # 컨테이너 안의 sh 에서 실행한다. 인자는 위치 인자로 넘겨 따옴표 해석을 피한다.
 # shellcheck disable=SC2016
+# 일반 파일만 센다(같은 이름의 디렉터리는 무시). 이름은 형식상 공백이 없어 단어 분리가 안전하다.
+# 하나라도 못 지우면 1 로 끝나되 나머지는 계속 지운다.
 prune_dumps_sh='
 cd "$1" || exit 1
 keep="$3"
-ls -1 -- "$2"-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].dump 2>/dev/null \
-  | sort -r | tail -n "+$((keep + 1))" \
-  | while IFS= read -r f; do rm -f -- "$f" && printf "%s\n" "$f"; done
+old="$(for f in "$2"-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].dump; do
+  [ -f "$f" ] && printf "%s\n" "$f"
+done | sort -r | tail -n "+$((keep + 1))")"
+rc=0
+for f in $old; do
+  if rm -f -- "$f"; then printf "%s\n" "$f"; else rc=1; fi
+done
+exit "$rc"
 '
-if removed="$(docker exec "$PG_CONTAINER" sh -c "$prune_dumps_sh" sh "$BACKUP_DIR" "$DB" "$KEEP_DUMPS")"; then
+# 공유 PostgreSQL 컨테이너가 멈춰 있어도 배포가 끝나도록 시간 제한을 둔다.
+if removed="$(timeout 60 docker exec "$PG_CONTAINER" sh -c "$prune_dumps_sh" sh "$BACKUP_DIR" "$DB" "$KEEP_DUMPS")"; then
   if [ -n "$removed" ]; then
     say "덤프 삭제($(printf '%s\n' "$removed" | wc -l | tr -d ' ')개, 최신 ${KEEP_DUMPS}개 유지):"
     printf '%s\n' "$removed" | sed 's/^/  /'
@@ -56,21 +67,26 @@ if removed="$(docker exec "$PG_CONTAINER" sh -c "$prune_dumps_sh" sh "$BACKUP_DI
     say "덤프: 지울 것 없음(최신 ${KEEP_DUMPS}개 유지)"
   fi
 else
-  say "! 덤프 정리 실패($PG_CONTAINER:$BACKUP_DIR)" >&2
+  [ -n "$removed" ] && printf '%s\n' "$removed" | sed 's/^/  삭제: /'
+  say "! 덤프 정리 실패(일부 또는 전체, $PG_CONTAINER:$BACKUP_DIR)" >&2
   rc=1
 fi
 
 # ── 2) API 이미지 ────────────────────────────────────────────────────────────
-if images="$(docker image ls "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}}')"; then
+# 직전 이미지를 모르거나 현재와 같으면(첫 배포 · 같은 sha 재배포) 롤백 대상이 무엇인지
+# 알 수 없으므로 이미지는 지우지 않는다.
+if [ -z "$PREV_IMAGE" ] || [ "$PREV_IMAGE" = "$CURRENT_IMAGE" ]; then
+  say "이미지: 직전 이미지가 없거나 현재와 같아 정리하지 않음"
+elif images="$(timeout 60 docker image ls "$IMAGE_REPO" --format '{{.Repository}}:{{.Tag}}')"; then
   removed_images=0
   while IFS= read -r img; do
     [ -n "$img" ] || continue
     [ "$img" = "$CURRENT_IMAGE" ] && continue
-    [ -n "$PREV_IMAGE" ] && [ "$img" = "$PREV_IMAGE" ] && continue
+    [ "$img" = "$PREV_IMAGE" ] && continue
     # 배포가 만든 불변 sha 태그만 다룬다(다른 태그 · <none> 은 그대로 둔다).
     case "$img" in "$IMAGE_REPO":*) ;; *) continue ;; esac
     [[ "${img##*:}" =~ ^[0-9a-f]{40}$ ]] || continue
-    if docker rmi "$img" >/dev/null; then
+    if timeout 60 docker rmi "$img" >/dev/null; then
       say "이미지 삭제: $img"
       removed_images=$((removed_images + 1))
     else
