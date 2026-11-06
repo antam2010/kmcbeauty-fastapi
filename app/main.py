@@ -64,6 +64,28 @@ def api_docs_kwargs(app_env: str) -> dict[str, str | None]:
     return {"docs_url": None, "redoc_url": None, "openapi_url": None}
 
 
+# 개발용 CORS origin: http/https + localhost/127.0.0.1/::1
+# + 10/172.16-31/192.168 대역 + 선택적 포트
+DEV_CORS_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost|127\.0\.0\.1|\[::1\]|"
+    r"10(?:\.\d{1,3}){3}|"
+    r"172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}|"
+    r"192\.168(?:\.\d{1,3}){2}"
+    r")(?::\d+)?$"
+)
+
+
+def cors_origin_regex(app_env: str) -> str | None:
+    """CORS 정규식 origin 을 돌려준다. production 은 None(명시 origin 만 허용)이다.
+
+    리프레시 토큰 쿠키가 SameSite=None 이라(app/api/auth.py) credentials 를
+    허용한 origin 의 페이지는 /auth/refresh 응답(새 토큰)을 읽을 수 있다. 그래서
+    localhost · 사설 IP 는 개발 환경(local/debug/stage)에서만 연다.
+    """
+    return DEV_CORS_ORIGIN_REGEX if app_env != "production" else None
+
+
 app = FastAPI(
     title="뷰티앱",
     description=(
@@ -108,13 +130,8 @@ app.add_middleware(
         "https://kmc2.daeho2.shop",
         "https://bueafit.vercel.app",
     ],
-    # http/https + localhost/127.0.0.1/::1 + 10/172.16-31/192.168 대역 + 선택적 포트
-    allow_origin_regex=r"^https?://("
-    r"localhost|127\.0\.0\.1|\[::1\]|"
-    r"10(?:\.\d{1,3}){3}|"
-    r"172\.(?:1[6-9]|2[0-9]|3[0-1])(?:\.\d{1,3}){2}|"
-    r"192\.168(?:\.\d{1,3}){2}"
-    r")(?::\d+)?$",
+    # 정규식(localhost · 사설 IP)은 개발 환경에서만 켠다(cors_origin_regex).
+    allow_origin_regex=cors_origin_regex(settings.APP_ENV),
     allow_credentials=True,  # 쿠키 허용
     # 와일드카드 대신 실제 사용하는 메서드만 명시적으로 허용한다.
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
