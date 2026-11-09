@@ -8,6 +8,7 @@ from app.crud.device_push_token_crud import deactivate_device_tokens_by_user
 from app.crud.shop_invite_curd import delete_invite, get_invite_by_code
 from app.crud.shop_user_crud import (
     ShopUser,
+    count_active_primary_owners,
     count_other_active_members,
     count_other_primary_owners,
     create_shop_user,
@@ -40,6 +41,8 @@ LAST_OWNER_DELETION_DETAIL = (
     "직원이 있는 샵의 마지막 대표원장은 탈퇴할 수 없습니다. "
     "다른 대표원장을 먼저 지정하세요."
 )
+# 초대한 샵에 활성 대표원장이 없을 때(원장 탈퇴 뒤 남은 초대코드)의 가입 409 문구.
+NO_OWNER_INVITE_DETAIL = "초대한 샵에 대표원장이 없어 가입할 수 없습니다."
 
 
 def get_user_service(db: Session, current_user: User) -> UserResponse:
@@ -101,10 +104,35 @@ def validate_user_creation(
     return invite
 
 
+# @MX:WARN: [AUTO] 초대 가입 가드 — 초대 행 → 대표원장 행 순서로 잠근다.
+# @MX:REASON: 생성자의 강제 탈퇴는 반대 순서(대표원장 행 → 샵 삭제 → 초대 행 cascade)라
+#             같은 샵에서 동시에 일어나면 교착할 수 있다. PostgreSQL 이 deadlock_timeout
+#             (약 1초) 뒤 한쪽을 중단해 그 요청은 500 이고, 무결성 영향은 없다
+#             (수용한 한계).
+def _ensure_invite_shop_has_owner(db: Session, shop_id: int) -> None:
+    """초대한 샵에 활성 대표원장이 있는지 확인한다(초대 행을 잠근 뒤 호출).
+
+    그 샵의 대표원장 행을 잠그고(lock_primary_owners) 활성 대표원장(탈퇴 유저 제외)을
+    센다. 0명이면 409 다 — 혼자인 원장이 초대코드를 남기고 탈퇴한 샵에 멤버만 생기는
+    것을 막는다. 탈퇴 가드와 같은 잠금이라 가입과 탈퇴가 직렬화되고, 기다린 쪽은
+    커밋된 상태로 다시 센다(PostgreSQL READ COMMITTED).
+
+    :raises CustomException: 409(초대한 샵에 활성 대표원장이 없음)
+    """
+    lock_primary_owners(db, shop_id)
+    if count_active_primary_owners(db, shop_id) == 0:
+        raise CustomException(
+            status_code=status.HTTP_409_CONFLICT,
+            domain=DOMAIN,
+            detail=NO_OWNER_INVITE_DETAIL,
+        )
+
+
 # @MX:NOTE: [AUTO] 초대코드는 1회용이다(첫 성공 가입이 소비). 초대 행 잠금(FOR UPDATE)
-#            → 검증 → 유저 + MANAGER 멤버십 생성 → 초대 삭제를 한 트랜잭션으로 커밋한다.
-#            같은 코드의 동시 가입은 잠금에서 기다린 뒤 삭제된 행을 못 찾아 400 이다.
-#            가입이 실패해 롤백되면 삭제도 취소되어 코드가 남는다.
+#            → 검증 → 대표원장 행 잠금 · 활성 대표원장 확인 → 유저 + MANAGER 멤버십 생성
+#            → 초대 삭제를 한 트랜잭션으로 커밋한다. 같은 코드의 동시 가입은 잠금에서
+#            기다린 뒤 삭제된 행을 못 찾아 400 이다. 가입이 실패해 롤백되면 삭제도
+#            취소되어 코드가 남는다.
 # 회원 생성
 def create_user_service(db: Session, user_create: UserCreate) -> UserResponse:
     # 권한 상승 방지: role 은 클라이언트가 아니라 서버가 결정한다.
@@ -119,6 +147,11 @@ def create_user_service(db: Session, user_create: UserCreate) -> UserResponse:
     user_data["password"] = hash_password(user_create.password)
 
     try:
+        if invite is not None:
+            # 초대 행 잠금(validate_user_creation) 뒤 그 샵의 대표원장 행을 잠그고 센다.
+            # 혼자인 원장이 초대코드를 남기고 탈퇴한 샵에 멤버만 생기는 것을 막는다.
+            _ensure_invite_shop_has_owner(db, invite.shop_id)
+
         user = create_user(db, user_data)
 
         # 4. MANAGER라면 shop_user 등록
@@ -145,6 +178,11 @@ def create_user_service(db: Session, user_create: UserCreate) -> UserResponse:
             domain=DOMAIN,
             exception=e,
         ) from e
+    except CustomException:
+        # 409(초대한 샵에 대표원장 없음): 롤백으로 잠금을 풀고(초대코드는 그대로 남는다)
+        # 아래 except Exception 의 500 으로 감싸지 않고 올린다.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         raise CustomException(

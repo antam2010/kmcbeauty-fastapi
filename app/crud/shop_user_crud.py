@@ -214,6 +214,32 @@ def count_other_primary_owners(db: Session, shop_id: int, user_id: int) -> int:
     )
 
 
+def count_active_primary_owners(db: Session, shop_id: int) -> int:
+    """샵의 활성 대표원장 수(탈퇴 유저 제외).
+
+    초대 가입 가드가 lock_primary_owners 로 잠근 뒤에 센다.
+    count_other_primary_owners 에 user_id 자리표시자를 넘기지 않는다
+    (`user_id != NULL` 은 모든 행을 거른다).
+
+    Args:
+        db (Session): Database session.
+        shop_id (int): 샵 ID.
+
+    Returns:
+        int: 활성 대표원장 수.
+
+    """
+    return db.scalar(
+        select(func.count(ShopUser.id))
+        .join(User, User.id == ShopUser.user_id)
+        .where(
+            ShopUser.shop_id == shop_id,
+            ShopUser.is_primary_owner == 1,
+            User.deleted_at.is_(None),
+        ),
+    )
+
+
 def get_primary_owner_shop_ids(db: Session, user_id: int) -> list[int]:
     """user_id 가 대표원장인 샵 ID 목록(shop_id 순).
 
