@@ -33,6 +33,12 @@ DATA_ERROR_CODE = "BAD_REQUEST"
 DATA_ERROR_DETAIL = "처리할 수 없는 값이 요청에 있습니다."
 DATA_ERROR_HINT = "입력 값을 확인해 주세요."
 
+# Redis 장애 · 타임아웃으로 처리하지 못한 요청의 503 응답(일반 문구).
+REDIS_ERROR_CODE = "SERVICE_UNAVAILABLE"
+REDIS_ERROR_DETAIL = (
+    "일시적으로 서비스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."
+)
+
 
 def _data_error_of(exception: BaseException | None) -> DataError | None:
     """오류의 원인이 DataError 면 돌려준다.
@@ -138,6 +144,27 @@ async def data_error_handler(request: Request, exc: Exception) -> Response:
     """
     error = CustomException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        exception=exc,
+    )
+    return await http_exception_handler(request, error)
+
+
+async def redis_error_handler(request: Request, exc: Exception) -> Response:
+    """처리되지 않은 Redis 오류(장애 · 타임아웃)를 503 응답으로 바꾼다.
+
+    리프레시 토큰 · 선택 샵은 Redis 에만 있어 로그인 · 재발급 · 로그아웃 · 샵 범위
+    API 는 Redis 없이 처리할 수 없다. slowapi rate limit 저장소의 오류도 여기로 온다.
+    유저 캐시 조회 · 저장 오류는 DB 로 넘어가므로 오지 않는다(app/utils/redis/user.py).
+
+    data_error_handler 와 같이 CustomException 을 거쳐 표준 오류 본문 · 경고 로그를
+    만들고, 5xx 이므로 Sentry 로 보낸다. 처리되지 않은 예외로 남지 않으므로 error_logger
+    미들웨어의 ERROR 로그 · Sentry 중복 전송은 없다(app/main.py 에서 등록).
+    """
+    error = CustomException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=REDIS_ERROR_CODE,
+        detail=REDIS_ERROR_DETAIL,
+        hint=None,
         exception=exc,
     )
     return await http_exception_handler(request, error)

@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_pagination import add_pagination
+from redis.exceptions import RedisError
 from sentry_sdk import capture_exception
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -26,7 +27,7 @@ from app.core.rate_limit import limiter
 from app.core.sentry import init_sentry
 from app.docs import api_change
 from app.docs.tags_metadata import tags_metadata
-from app.exceptions import CustomException, data_error_handler
+from app.exceptions import CustomException, data_error_handler, redis_error_handler
 
 # 기타
 
@@ -121,6 +122,11 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # 서비스가 감싸지 않은 DataError(목록 검색어의 NUL 문자 등)도 500 이 아니라 400 이다.
 # 서비스가 감싼 경로는 CustomException 이 같은 400 으로 바꾼다(app/exceptions.py).
 app.add_exception_handler(DataError, data_error_handler)
+
+# Redis 장애 · 타임아웃(처리되지 않은 RedisError)은 500 이 아니라 503 이다. 리프레시
+# 토큰 · 선택 샵 · rate limit 저장소(slowapi)가 Redis 에 있다. 유저 캐시 조회 · 저장
+# 오류는 처리기까지 오지 않고 DB 로 넘어간다(app/utils/redis/user.py).
+app.add_exception_handler(RedisError, redis_error_handler)
 
 
 # CORS 설정 (Cross-Origin Resource Sharing)
