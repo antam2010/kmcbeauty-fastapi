@@ -1,3 +1,4 @@
+import redis
 from fastapi import status
 from fastapi_pagination import Page
 from sqlalchemy.exc import SQLAlchemyError
@@ -144,6 +145,10 @@ def set_selected_shop_service(db: Session, user: User, shop_id: int) -> None:
             detail="DB Error",
             exception=e,
         ) from e
+    except redis.RedisError:
+        # Redis 장애는 전역 처리기(app/main.py)가 503 으로 바꾼다
+        # (아래 except Exception 의 500 으로 감싸지 않는다).
+        raise
     except Exception as e:
         raise CustomException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -171,6 +176,10 @@ def delete_selected_shop_service(user: User) -> None:
         clear_selected_shop_redis(user.id)
 
     except CustomException:
+        raise
+    except redis.RedisError:
+        # Redis 장애는 전역 처리기(app/main.py)가 503 으로 바꾼다
+        # (아래 except Exception 의 500 으로 감싸지 않는다).
         raise
     except Exception as e:
         raise CustomException(
@@ -206,6 +215,10 @@ def get_selected_shop_service(db: Session, user: User) -> Shop:
         )
 
     except CustomException:
+        raise
+    except redis.RedisError:
+        # Redis 장애는 전역 처리기(app/main.py)가 503 으로 바꾼다
+        # (아래 except Exception 의 500 으로 감싸지 않는다).
         raise
     except Exception as e:
         raise CustomException(

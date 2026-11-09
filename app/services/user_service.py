@@ -1,3 +1,4 @@
+import redis
 from fastapi import status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -197,6 +198,10 @@ def update_user_service(
             exception=e,
         ) from e
     except CustomException:
+        raise
+    except redis.RedisError:
+        # 커밋 뒤 세션 · 캐시 정리의 Redis 장애: 전역 처리기(app/main.py)가 503 으로
+        # 바꾼다(아래 500 으로 감싸지 않는다).
         raise
     except Exception as e:
         raise CustomException(
