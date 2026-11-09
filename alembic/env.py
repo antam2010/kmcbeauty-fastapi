@@ -55,12 +55,24 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# 온라인 마이그레이션이 잠금을 기다리는 상한(PostgreSQL lock_timeout).
+# scripts/deploy.sh 는 compose up 전에 일회성 kmcbeauty-migrate 컨테이너로
+# `alembic upgrade head` 를 돌린다. 상한이 없으면 잠금을 기다리는 DDL(ALTER TABLE 등)
+# 뒤로 그 테이블의 다른 모든 쿼리가 줄을 서 운영 API 가 멈춘다. 상한을 넘으면
+# 마이그레이션이 실패하고 deploy.sh 가 compose up 전에 멈추므로 기존 컨테이너가 계속
+# 서비스한다(잠금이 풀린 뒤 다시 배포한다). 오프라인 모드(SQL 생성)에는 걸지 않는다.
+MIGRATION_LOCK_TIMEOUT = "10s"
+
+
 # 온라인 모드
 def run_migrations_online() -> None:
     connectable = engine_from_config(
         config.get_section(config.config_ini_section),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # 세션 시작 옵션(libpq options)으로 건다. SET 을 따로 실행하면 begin_transaction
+        # 밖에서 SQLAlchemy 2.0 이 커밋되지 않는 트랜잭션을 자동 시작한다.
+        connect_args={"options": f"-c lock_timeout={MIGRATION_LOCK_TIMEOUT}"},
     )
 
     with connectable.connect() as connection:

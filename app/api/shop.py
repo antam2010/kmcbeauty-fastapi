@@ -275,6 +275,8 @@ def create_shop_user(
     responses={
         status.HTTP_403_FORBIDDEN: COMMON_ERROR_RESPONSES[status.HTTP_403_FORBIDDEN],
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
+        # 마지막 대표원장을 대표원장에서 빼면 409(SHOP_USER_CONFLICT).
+        status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
     },
 )
 def update_shop_user(
@@ -305,6 +307,8 @@ def update_shop_user(
     responses={
         status.HTTP_403_FORBIDDEN: COMMON_ERROR_RESPONSES[status.HTTP_403_FORBIDDEN],
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
+        # 마지막 대표원장의 연결을 해제하면 409(SHOP_USER_CONFLICT).
+        status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
     },
 )
 def delete_shop_user(

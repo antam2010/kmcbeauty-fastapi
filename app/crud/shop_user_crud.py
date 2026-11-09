@@ -1,5 +1,6 @@
 import logging
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased, contains_eager
 
 from app.core.limits import SHOP_USERS_MAX
@@ -156,6 +157,136 @@ def get_shop_user_with_user(
             User.deleted_at.is_(None),
         )
         .first()
+    )
+
+
+def lock_primary_owners(db: Session, shop_id: int) -> None:
+    """샵의 대표원장 매핑 행을 잠근다(SELECT ... FOR UPDATE).
+
+    대표원장을 빼는 쓰기(연결 해제 · 강등 · 탈퇴)가 남은 대표원장을 세기 전에 호출한다.
+    같은 샵의 해제 · 강등 · 탈퇴가 동시에 오면 나중 트랜잭션은 앞 트랜잭션이 끝날 때까지
+    이 잠금에서 기다린 뒤, 커밋된 상태로 다시 센다(PostgreSQL READ COMMITTED). 잠금은
+    트랜잭션이 끝날 때(커밋 · 롤백 · 세션 종료) 풀린다. id 순서로 잠가 교착을 피한다.
+    탈퇴 유저의 행까지 잠가도 무해하다(셀 때만 뺀다).
+
+    Args:
+        db (Session): Database session.
+        shop_id (int): 샵 ID.
+
+    """
+    # 결과는 쓰지 않는다(행 잠금이 목적). 끝까지 읽어 잠금 대상 행을 모두 확정한다.
+    db.execute(
+        select(ShopUser.id)
+        .where(ShopUser.shop_id == shop_id, ShopUser.is_primary_owner == 1)
+        .order_by(ShopUser.id)
+        .with_for_update(),
+    ).all()
+
+
+# @MX:NOTE: [AUTO] 단독으로 쓰지 않는다 — lock_primary_owners 로 잠근 뒤에 센다
+#            (shop_user_service._ensure_another_primary_owner ·
+#            user_service._ensure_staffed_shops_keep_owner). 잠금 없이 센 값으로
+#            해제 · 강등 · 탈퇴를 허용하면 동시 요청이 둘 다 통과할 수 있다.
+def count_other_primary_owners(db: Session, shop_id: int, user_id: int) -> int:
+    """user_id 를 뺀 샵의 활성 대표원장 수(탈퇴 유저 제외).
+
+    탈퇴(소프트삭제)한 대표원장의 매핑은 이력일 뿐이므로 users 를 조인해 활성 유저만
+    센다(get_shop_user 와 같은 관례).
+
+    Args:
+        db (Session): Database session.
+        shop_id (int): 샵 ID.
+        user_id (int): 빼고 셀 유저 ID(해제 · 강등 대상).
+
+    Returns:
+        int: 다른 활성 대표원장 수.
+
+    """
+    return db.scalar(
+        select(func.count(ShopUser.id))
+        .join(User, User.id == ShopUser.user_id)
+        .where(
+            ShopUser.shop_id == shop_id,
+            ShopUser.user_id != user_id,
+            ShopUser.is_primary_owner == 1,
+            User.deleted_at.is_(None),
+        ),
+    )
+
+
+def count_active_primary_owners(db: Session, shop_id: int) -> int:
+    """샵의 활성 대표원장 수(탈퇴 유저 제외).
+
+    초대 가입 가드가 lock_primary_owners 로 잠근 뒤에 센다.
+    count_other_primary_owners 에 user_id 자리표시자를 넘기지 않는다
+    (`user_id != NULL` 은 모든 행을 거른다).
+
+    Args:
+        db (Session): Database session.
+        shop_id (int): 샵 ID.
+
+    Returns:
+        int: 활성 대표원장 수.
+
+    """
+    return db.scalar(
+        select(func.count(ShopUser.id))
+        .join(User, User.id == ShopUser.user_id)
+        .where(
+            ShopUser.shop_id == shop_id,
+            ShopUser.is_primary_owner == 1,
+            User.deleted_at.is_(None),
+        ),
+    )
+
+
+def get_primary_owner_shop_ids(db: Session, user_id: int) -> list[int]:
+    """user_id 가 대표원장인 샵 ID 목록(shop_id 순).
+
+    탈퇴 가드가 이 순서로 샵마다 대표원장 행을 잠근다(여러 샵을 잠그는 순서를 고정해
+    교착을 피한다). 잠금 전에 읽으므로 동시에 커밋된 승격은 보이지 않을 수 있다.
+
+    Args:
+        db (Session): Database session.
+        user_id (int): 유저 ID.
+
+    Returns:
+        list[int]: 대표원장 매핑이 있는 샵 ID.
+
+    """
+    return list(
+        db.execute(
+            select(ShopUser.shop_id)
+            .where(ShopUser.user_id == user_id, ShopUser.is_primary_owner == 1)
+            .order_by(ShopUser.shop_id),
+        )
+        .scalars()
+        .all(),
+    )
+
+
+def count_other_active_members(db: Session, shop_id: int, user_id: int) -> int:
+    """user_id 를 뺀 샵의 활성 멤버 수(대표원장 여부 무관, 탈퇴 유저 제외).
+
+    탈퇴 가드가 다른 대표원장이 없는 샵에서만 센다(lock_primary_owners 로 잠근 뒤).
+
+    Args:
+        db (Session): Database session.
+        shop_id (int): 샵 ID.
+        user_id (int): 빼고 셀 유저 ID(탈퇴하는 유저).
+
+    Returns:
+        int: 다른 활성 멤버 수.
+
+    """
+    return db.scalar(
+        select(func.count(ShopUser.id))
+        .join(User, User.id == ShopUser.user_id)
+        .where(
+            ShopUser.shop_id == shop_id,
+            ShopUser.user_id != user_id,
+            User.deleted_at.is_(None),
+        ),
     )
 
 

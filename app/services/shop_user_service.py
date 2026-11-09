@@ -4,11 +4,13 @@ from sqlalchemy.orm import Session
 
 from app.crud.shop_user_crud import (
     ShopUser,
+    count_other_primary_owners,
     create_shop_user,
     delete_shop_user,
     get_shop_user,
     get_shop_user_with_user,
     get_shop_users_by_shop_id,
+    lock_primary_owners,
 )
 from app.crud.user_crud import get_user_by_email
 from app.exceptions import CustomException
@@ -20,6 +22,11 @@ from app.schemas.shop_user import (
 )
 
 DOMAIN = "SHOP_USER"
+# 해제 · 강등 뒤 샵에 활성 대표원장이 하나도 남지 않을 때의 409 문구.
+LAST_PRIMARY_OWNER_DETAIL = (
+    "마지막 대표원장은 연결을 해제하거나 대표원장에서 뺄 수 없습니다. "
+    "다른 대표원장을 먼저 지정하세요."
+)
 
 
 def _require_primary_owner(db: Session, shop_id: int, user_id: int) -> ShopUser:
@@ -39,6 +46,28 @@ def _require_primary_owner(db: Session, shop_id: int, user_id: int) -> ShopUser:
             domain=DOMAIN,
         )
     return requester
+
+
+# @MX:WARN: [AUTO] 마지막 대표원장 가드 — 대표원장 행을 잠근 뒤에 센다.
+# @MX:REASON: 잠그지 않고 세면 두 대표원장이 동시에 스스로 해제 · 강등할 때 둘 다
+#             상대를 "다른 대표원장"으로 보고 통과해 대표원장이 0명이 된다(직원 · 초대
+#             관리 불가, DB 수작업으로만 복구). 잠금은 커밋 · 롤백까지 유지된다.
+def _ensure_another_primary_owner(db: Session, shop_id: int, user_id: int) -> None:
+    """user_id 가 대표원장에서 빠져도 샵에 활성 대표원장이 남는지 확인한다.
+
+    샵의 대표원장 행을 잠근 뒤(lock_primary_owners) user_id 를 뺀 활성 대표원장을
+    센다(count_other_primary_owners, 탈퇴 유저 제외). 같은 샵의 해제 · 강등이 동시에
+    오면 나중 요청은 잠금에서 기다렸다가 앞 요청이 커밋된 상태로 센다.
+
+    :raises CustomException: 409(남는 활성 대표원장이 없음)
+    """
+    lock_primary_owners(db, shop_id)
+    if count_other_primary_owners(db, shop_id, user_id) == 0:
+        raise CustomException(
+            status_code=status.HTTP_409_CONFLICT,
+            domain=DOMAIN,
+            detail=LAST_PRIMARY_OWNER_DETAIL,
+        )
 
 
 def get_shop_users_service(
@@ -157,9 +186,12 @@ def update_shop_user_service(
     """샵-유저 연결(멤버십) 수정 서비스.
 
     현재는 대표원장 여부(is_primary_owner)만 갱신한다. role 등 권한 필드는 다루지
-    않는다(SECURITY-001 소관).
+    않는다(SECURITY-001 소관). 대표원장에서 빼는(1→0) 수정은 샵에 다른 활성 대표원장이
+    남을 때만 한다: 대표원장 행을 잠근 뒤 세어 없으면 409 다(마지막 대표원장 보호,
+    _ensure_another_primary_owner). 승격과 대표원장이 아닌 연결의 수정은 그대로다.
 
-    :raises CustomException: 403(권한 없음), 404(연결 없음), 500
+    :raises CustomException: 403(권한 없음), 404(연결 없음),
+        409(마지막 대표원장을 대표원장에서 뺌), 500
     """
     _require_primary_owner(db, shop_id, current_user.id)
 
@@ -172,6 +204,8 @@ def update_shop_user_service(
         )
 
     try:
+        if shop_user.is_primary_owner and not payload.is_primary_owner:
+            _ensure_another_primary_owner(db, shop_id, user_id)
         shop_user.is_primary_owner = payload.is_primary_owner
         db.commit()
         db.refresh(shop_user)
@@ -205,9 +239,12 @@ def delete_shop_user_service(
     """샵-유저 연결(멤버십) 삭제 서비스.
 
     ShopUser 는 연결 테이블(SoftDeleteMixin 없음)이므로 매핑만 제거한다. 유저 계정은
-    유지된다. 자기 자신의 마지막 대표원장 연결 해제 등 정책 판단은 SECURITY-001 소관.
+    유지된다. 대표원장 연결의 해제는 샵에 다른 활성 대표원장이 남을 때만 한다: 대표원장
+    행을 잠근 뒤 세어 없으면 409 다(마지막 대표원장 보호,
+    _ensure_another_primary_owner).
 
-    :raises CustomException: 403(권한 없음), 404(연결 없음), 500
+    :raises CustomException: 403(권한 없음), 404(연결 없음),
+        409(마지막 대표원장의 연결 해제), 500
     """
     _require_primary_owner(db, shop_id, current_user.id)
 
@@ -220,6 +257,8 @@ def delete_shop_user_service(
         )
 
     try:
+        if shop_user.is_primary_owner:
+            _ensure_another_primary_owner(db, shop_id, user_id)
         delete_shop_user(db, shop_user)
         db.commit()
     except CustomException:

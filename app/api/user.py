@@ -88,6 +88,8 @@ def update_user_handler(
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
+        # 직원이 있는 샵의 마지막 대표원장이면 409(USER_CONFLICT).
+        status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
     },
 )
 def delete_user_handler(
@@ -105,6 +107,8 @@ def delete_user_handler(
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
+        # 직원이 있는 샵의 마지막 대표원장이면 409(USER_CONFLICT).
+        status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
     },
 )
 def delete_user_force_handler(

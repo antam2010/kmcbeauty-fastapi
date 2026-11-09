@@ -23,6 +23,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql.selectable import Join
 
 import app.models  # noqa: F401  # 문자열 관계 참조 해석을 위해 전체 모델 로드
 from app.enum.role import UserRole
@@ -136,6 +137,13 @@ def test_failed_signup_does_not_consume_invite() -> None:
     assert db.rows("shop_invite") == []
 
 
+def _table_names(from_clause: object) -> set[str]:
+    """FROM 항목의 테이블 이름(JOIN 은 양쪽을 펼친다)."""
+    if isinstance(from_clause, Join):
+        return _table_names(from_clause.left) | _table_names(from_clause.right)
+    return {from_clause.name}
+
+
 def test_signup_locks_invite_row_for_update() -> None:
     """가입의 초대코드 조회는 행 잠금(SELECT ... FOR UPDATE)을 요청한다."""
     db = _world()
@@ -145,7 +153,8 @@ def test_signup_locks_invite_row_for_update() -> None:
     invite_selects = [
         " ".join(str(stmt.compile(dialect=postgresql.dialect())).split())
         for stmt in db.statements
-        if "shop_invite" in {table.name for table in stmt.get_final_froms()}
+        if "shop_invite"
+        in {name for table in stmt.get_final_froms() for name in _table_names(table)}
     ]
     assert invite_selects
     assert all(sql.endswith("FOR UPDATE") for sql in invite_selects)

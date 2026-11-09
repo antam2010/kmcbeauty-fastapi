@@ -45,7 +45,8 @@ def get_current_user(
             exception=e,
         ) from e
 
-    # Redis → fallback to DB
+    # Redis → fallback to DB. Redis 오류(장애 · 타임아웃)도 캐시 미스처럼 DB 로 읽는다
+    # (get_user_redis · set_user_redis 는 user_id 만 경고로 남기고 오류를 삼킨다).
     if user_redis := get_user_redis(user_id):
         user = User(**user_redis)
     else:

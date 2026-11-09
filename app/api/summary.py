@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -28,7 +30,11 @@ router = APIRouter(prefix="/summary", tags=["통계"])
     },
 )
 def get_dashboard_summary(
-    params: DashboardFilter = Depends(),
+    # 쿼리 파라미터 모델로 받는다. Depends() 는 클래스 시그니처로 파라미터를 만들어
+    # target_date 의 default_factory(오늘 KST)가 쓰이지 않고(기본값이 <factory>),
+    # 생략하면 422 였다. Query() 는 모델 검증이라 default_factory · 범위가 그대로
+    # 적용된다.
+    params: Annotated[DashboardFilter, Query()],
     db: Session = Depends(get_db),
     current_shop: Shop = Depends(get_current_shop),
 ) -> DashboardSummaryResponse:

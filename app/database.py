@@ -17,6 +17,10 @@ engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
     echo=False,
+    # DB 오류 문자열(str(e))에 바인드 파라미터(사용자 입력 · 개인정보일 수 있음)를 싣지
+    # 않는다. CustomException 이 원인 예외를 str 로 경고 로그에 남기고 5xx 면 Sentry 로
+    # 보낸다(app/exceptions.py). SQL 문은 그대로 남아 실패 위치는 보인다.
+    hide_parameters=True,
     connect_args={"options": "-c timezone=UTC"},
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
