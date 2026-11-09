@@ -221,6 +221,12 @@ def delete_events(monkeypatch: pytest.MonkeyPatch) -> list:
         return 0
 
     monkeypatch.setattr(user_service, "get_user_by_id", lambda _db, _uid: user)
+    # 마지막 대표원장 가드의 조회: 대표원장인 샵이 없는 유저(가드가 막지 않는다).
+    monkeypatch.setattr(
+        user_service,
+        "get_primary_owner_shop_ids",
+        lambda _db, _uid: [],
+    )
     monkeypatch.setattr(user_service, "delete_user_db", fake_delete_user_db)
     monkeypatch.setattr(
         user_service,
