@@ -1,5 +1,9 @@
+import threading
+import time
+from collections.abc import Callable
 from typing import Any
 
+import redis
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
@@ -7,14 +11,63 @@ from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
 
 from app.core.config import settings
 
+# Redis 장애 중 RedisError 이벤트는 프로세스당 이 간격(초)에 한 건만 보낸다.
+REDIS_ERROR_EVENT_INTERVAL_SECONDS = 60
+
+
+class EventThrottle:
+    """간격(초)마다 한 건만 통과시키는 스레드 안전 스로틀.
+
+    통과한 시각부터 창이 새로 시작되고, 창 안에서 버린 건은 창을 늘리지 않는다.
+    clock 은 단조 시계다(테스트는 가짜 시계를 넣는다).
+    """
+
+    def __init__(
+        self,
+        interval: float,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._interval = interval
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._last_allowed: float | None = None
+
+    def allow(self) -> bool:
+        """이번 건을 보내도 되면 True(창을 새로 시작한다), 창 안이면 False."""
+        # 읽기 · 비교 · 갱신을 한 잠금 안에서 한다(동시에 온 이벤트는 한 건만 통과).
+        with self._lock:
+            last, now = self._last_allowed, self._clock()
+            if last is not None and now - last < self._interval:
+                return False
+            self._last_allowed = now
+            return True
+
+
+# @MX:NOTE: [AUTO] 프로세스 전역 상태(마지막으로 보낸 RedisError 이벤트 시각). 워커
+#            프로세스마다 따로 센다 — 운영은 uvicorn 한 프로세스(Dockerfile CMD 에
+#            --workers 없음)라 60초에 한 건이다. 테스트는 가짜 시계를 쓰는 새 인스턴스로
+#            바꾼다(tests/test_sentry_redis_throttle_fix.py).
+_redis_error_throttle = EventThrottle(REDIS_ERROR_EVENT_INTERVAL_SECONDS)
+
 
 def before_send(
     event: dict[str, Any],
-    _hint: dict[str, Any],
+    hint: dict[str, Any],
 ) -> dict[str, Any] | None:
-    # _hint 는 Sentry before_send 콜백 시그니처가 요구하는 인자로 미사용이다.
+    # hint 는 SDK 가 넘기는 원본 정보다. 예외 이벤트면 exc_info=(type, value, tb)가 있어
+    # RedisError 이벤트를 가려내는 데 쓴다(없거나 None 이면 예외 이벤트가 아니다).
     if settings.APP_ENV in ["local", "debug"]:
         return None  # 완전히 차단하고 싶으면 이렇게
+
+    # Redis 장애 중에는 요청마다 RedisError 이벤트가 생긴다(redis_error_handler 의 503).
+    # 프로세스당 60초에 한 건만 보내고 나머지는 버린다. 그 밖의 이벤트는 그대로 보낸다.
+    exc_info = hint.get("exc_info")
+    if (
+        exc_info is not None
+        and isinstance(exc_info[1], redis.RedisError)
+        and not _redis_error_throttle.allow()
+    ):
+        return None
 
     return event
 

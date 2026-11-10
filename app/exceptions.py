@@ -160,6 +160,7 @@ async def redis_error_handler(request: Request, exc: Exception) -> Response:
     data_error_handler 와 같이 CustomException 을 거쳐 표준 오류 본문 · 경고 로그를
     만들고, 5xx 이므로 Sentry 로 보낸다. 처리되지 않은 예외로 남지 않으므로 error_logger
     미들웨어의 ERROR 로그 · Sentry 중복 전송은 없다(app/main.py 에서 등록).
+    Sentry 는 RedisError 이벤트를 프로세스당 60초에 한 건만 받는다(app/core/sentry.py).
     """
     error = CustomException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
