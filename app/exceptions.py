@@ -154,7 +154,8 @@ async def redis_error_handler(request: Request, exc: Exception) -> Response:
 
     리프레시 토큰 · 선택 샵은 Redis 에만 있어 로그인 · 재발급 · 로그아웃 · 샵 범위
     API 는 Redis 없이 처리할 수 없다. slowapi rate limit 저장소의 오류도 여기로 온다.
-    유저 캐시 조회 · 저장 오류는 DB 로 넘어가므로 오지 않는다(app/utils/redis/user.py).
+    유저 캐시 조회 · 저장 오류는 DB 로 넘어가므로 오지 않는다(조회 오류는
+    app/dependencies/auth.py 가 잡고, 저장 오류는 app/utils/redis/user.py 가 삼킨다).
 
     data_error_handler 와 같이 CustomException 을 거쳐 표준 오류 본문 · 경고 로그를
     만들고, 5xx 이므로 Sentry 로 보낸다. 처리되지 않은 예외로 남지 않으므로 error_logger

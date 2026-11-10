@@ -1,3 +1,4 @@
+import redis
 from fastapi import Depends, status
 from fastapi.security import OAuth2PasswordBearer
 from sentry_sdk import set_user
@@ -45,9 +46,16 @@ def get_current_user(
             exception=e,
         ) from e
 
-    # Redis → fallback to DB. Redis 오류(장애 · 타임아웃)도 캐시 미스처럼 DB 로 읽는다
-    # (get_user_redis · set_user_redis 는 user_id 만 경고로 남기고 오류를 삼킨다).
-    if user_redis := get_user_redis(user_id):
+    # Redis → fallback to DB. 조회의 Redis 오류(장애 · 타임아웃)도 캐시 미스처럼 DB 로
+    # 읽는다(경고 로그는 get_user_redis 가 user_id 만 남긴다).
+    cache_read_failed = False
+    try:
+        user_redis = get_user_redis(user_id)
+    except redis.RedisError:
+        user_redis = None
+        cache_read_failed = True
+
+    if user_redis:
         user = User(**user_redis)
     else:
         # 소프트삭제 유저는 제외한다(get_user_by_id 가 deleted_at IS NULL 로 거른다).
@@ -59,7 +67,11 @@ def get_current_user(
                 domain=DOMAIN,
                 hint="사용자를 찾을 수 없습니다.",
             )
-        set_user_redis(user)  # ORM 객체를 캐싱
+        # 조회가 실패한 요청에서는 쓰지 않는다: 응답 없는 Redis 는 명령마다 2초를
+        # 기다리므로 쓰기까지 하면 요청이 4초 걸린다. 캐시는 보통 미스(값 없음)일 때만
+        # 채운다. 저장 오류는 set_user_redis 가 경고만 남기고 삼킨다.
+        if not cache_read_failed:
+            set_user_redis(user)  # ORM 객체를 캐싱
 
     # Sentry 사용자 식별 정보 설정 — id 만 보낸다(email 등 PII 는 전송하지 않는다).
     set_user({"id": user.id})
