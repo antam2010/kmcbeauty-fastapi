@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated, ClassVar
 
-from pydantic import AfterValidator, EmailStr, Field, model_validator
+from pydantic import AfterValidator, EmailStr, Field, field_validator, model_validator
 
 from app.enum.role import UserRole
 from app.schemas.mixin.base import BaseResponseModel
@@ -27,8 +27,27 @@ NormalizedEmailStr = Annotated[
 
 
 class UserBase(BaseResponseModel):
-    name: str = Field(..., min_length=3, max_length=50, description="이름")
+    # 이름은 1~50자다(두 글자 한국어 이름 허용, 사용자 결정 2026-11-10). 응답
+    # 스키마도 이 클래스를 상속하므로 입력과 응답이 함께 바뀐다. 공백뿐인 이름은
+    # 입력 스키마(UserNameInput)에서만 거절한다.
+    name: str = Field(..., min_length=1, max_length=50, description="이름")
     email: NormalizedEmailStr = Field(..., description="유효한 이메일 주소")
+
+
+class UserNameInput(UserBase):
+    """가입 · 수정 입력의 이름 검사: 공백뿐인 이름은 빈 값으로 보고 거절한다.
+
+    응답 스키마에는 두지 않는다. 저장된 이름이 공백뿐이어도 응답 검증이 실패해
+    500 이 되지 않게 한다. 저장 값은 바꾸지 않는다(앞뒤 공백을 지우지 않는다).
+    """
+
+    @field_validator("name")
+    @classmethod
+    def reject_blank_name(cls, v: str) -> str:
+        if not v.strip():
+            msg = "이름을 입력해 주세요."
+            raise ValueError(msg)
+        return v
 
 
 class UserRoleMixin(BaseResponseModel):
@@ -49,7 +68,7 @@ class UserBaseResponse(UserBase, UserRoleMixin):
     }
 
 
-class UserCreate(UserBase):
+class UserCreate(UserNameInput):
     """유저 생성 요청 스키마.
 
     권한 상승 방지: 클라이언트는 role 을 전송할 수 없다. 서버가 invite_code 유무로
@@ -69,7 +88,7 @@ class UserCreate(UserBase):
     )
 
 
-class UserUpdate(UserBase):
+class UserUpdate(UserNameInput):
     """유저 수정 요청 스키마.
 
     권한 상승 방지: role 등 권한 필드는 포함하지 않는다. 권한 변경은 별도 관리자
