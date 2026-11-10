@@ -504,10 +504,11 @@ def test_email_max_length_is_documented_in_openapi_schema() -> None:
         # UTC 로 정확히 0001-01-01 00:00 / 9999-12-31 23:59:59
         {"reserved_at": "0001-01-01T09:00:00+09:00"},
         {"reserved_at": "9999-12-31T14:59:59-09:00"},
-        # 오프셋 없는 값은 변환 없이 그대로 저장된다
-        {"reserved_at": "0001-01-01T00:00:00", "finished_at": "9999-12-31T23:59:59"},
+        # Z(UTC)로 보낸 양 끝 값. 오프셋 없는 값은 422 다(사용자 결정 2026-11-10,
+        # tests/test_treatment_aware_datetime_fix.py).
+        {"reserved_at": "0001-01-01T00:00:00Z", "finished_at": "9999-12-31T23:59:59Z"},
     ],
-    ids=["customer-fields", "reference-ids", "utc-min", "utc-max", "naive-edges"],
+    ids=["customer-fields", "reference-ids", "utc-min", "utc-max", "utc-z-edges"],
 )
 @pytest.mark.parametrize("schema", [TreatmentCreate, TreatmentUpdate])
 def test_treatment_boundary_values_are_accepted(
