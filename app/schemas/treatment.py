@@ -1,7 +1,7 @@
 from datetime import UTC, date, datetime
 from typing import ClassVar
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from app.enum.treatment_status import PaymentMethod, TreatmentStatus
 from app.schemas.limits import FILTER_DATE_MAX, FILTER_DATE_MIN, PG_INT_MAX
@@ -34,10 +34,20 @@ class TreatmentBase(BaseResponseModel):
         description="고객 전화번호 (전화번호부 미등록 시)",
         max_length=20,
     )
-    reserved_at: datetime = Field(..., description="예약 일시")
+    # 일시는 시간대(오프셋)가 있어야 한다(사용자 결정 2026-11-10). 오프셋 없는 값은
+    # 어느 시간대 기준인지 알 수 없어 422 다(type timezone_aware). 예전에는 그대로
+    # UTC 벽시계로 저장해 앱이 보낸 KST 시각이 9시간 밀렸다. 응답은 DB 의 naive UTC
+    # 에 UTC 를 붙여(BaseResponseModel) 그대로 통과한다.
+    reserved_at: AwareDatetime = Field(
+        ...,
+        description="예약 일시 (시간대 필수, 예: 2026-11-10T05:00:00Z)",
+    )
     memo: str | None = Field(None, description="메모")
     status: TreatmentStatus = Field(..., description="예약 상태")
-    finished_at: datetime | None = Field(None, description="시술 완료일시")
+    finished_at: AwareDatetime | None = Field(
+        None,
+        description="시술 완료일시 (시간대 필수)",
+    )
     payment_method: PaymentMethod = Field(
         PaymentMethod.CARD,
         description="결제 수단",
