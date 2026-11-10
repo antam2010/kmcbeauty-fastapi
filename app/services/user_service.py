@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.crud.device_push_token_crud import deactivate_device_tokens_by_user
+from app.crud.shop_crud import get_created_shop_ids
 from app.crud.shop_invite_curd import delete_invite, get_invite_by_code
 from app.crud.shop_user_crud import (
     ShopUser,
@@ -40,6 +41,11 @@ DOMAIN = "USER"
 LAST_OWNER_DELETION_DETAIL = (
     "직원이 있는 샵의 마지막 대표원장은 탈퇴할 수 없습니다. "
     "다른 대표원장을 먼저 지정하세요."
+)
+# 강제 탈퇴가 지울 샵(내가 만든 샵)에 다른 활성 멤버가 있을 때의 409 문구.
+CREATOR_FORCE_DELETION_DETAIL = (
+    "다른 멤버가 있는 샵을 만든 사용자는 강제 탈퇴할 수 없습니다. "
+    "일반 탈퇴를 이용하세요."
 )
 # 초대한 샵에 활성 대표원장이 없을 때(원장 탈퇴 뒤 남은 초대코드)의 가입 409 문구.
 NO_OWNER_INVITE_DETAIL = "초대한 샵에 대표원장이 없어 가입할 수 없습니다."
@@ -249,29 +255,53 @@ def update_user_service(
         ) from e
 
 
-# @MX:WARN: [AUTO] 탈퇴 가드 — 샵마다 대표원장 행을 잠근 뒤에 센다.
-# @MX:REASON: 잠그지 않고 세면 탈퇴와 다른 대표원장의 해제 · 강등이 동시에 통과해 직원은
-#             있는데 관리할 사람이 없는 샵이 된다. 잠금(lock_primary_owners)이
-#             shop_user_service 의 해제 · 강등 가드와 같아 둘이 직렬화된다.
-def _ensure_staffed_shops_keep_owner(db: Session, user_id: int) -> None:
-    """탈퇴해도 직원이 있는 샵에 활성 대표원장이 남는지 확인한다.
+# @MX:WARN: [AUTO] 탈퇴 가드 — 샵마다 대표원장 행을 잠근 뒤에 센다(shop_id 오름차순).
+# @MX:REASON: 두 규칙이다. (1) 마지막 대표원장(두 모드): 직원이 있는 샵에 활성
+#             대표원장이 남아야 한다. (2) 생성자(강제만): 강제 탈퇴는 만든 샵을
+#             데이터째 지우므로(User.shops cascade) 다른 활성 멤버가 있으면 막는다.
+#             잠금(lock_primary_owners)이 해제 · 강등 가드 · 초대 가입과 같아, 잠그지
+#             않고 세면 그 쓰기와 동시에 통과한다. 여러 샵은 대표원장인 샵과 만든 샵의
+#             합집합을 shop_id 오름차순으로 잠가 교착을 피한다.
+def _ensure_staffed_shops_keep_owner(
+    db: Session,
+    user_id: int,
+    *,
+    is_soft_delete: bool,
+) -> None:
+    """탈퇴해도 다른 멤버가 쓰는 샵이 관리자 없이 남거나 지워지지 않는지 확인한다.
 
-    user_id 가 대표원장인 샵마다(shop_id 순) 대표원장 행을 잠그고 다른 활성 대표원장을
-    센다. 없을 때만 다른 활성 멤버(역할 무관, 탈퇴 유저 제외)를 세어 있으면 409 다.
+    user_id 가 대표원장인 샵과 (강제 탈퇴면) user_id 가 만든 샵을 합쳐 shop_id 순으로
+    한 번 돈다. 샵마다 대표원장 행을 먼저 잠그고(lock_primary_owners) 센다.
+    - 대표원장인 샵: 다른 활성 대표원장이 없을 때만 다른 활성 멤버(역할 무관, 탈퇴 유저
+      제외)를 세어 있으면 409(LAST_OWNER_DELETION_DETAIL)다. 이 규칙을 먼저 본다.
+    - 만든 샵(강제 탈퇴만): 강제 탈퇴는 그 샵을 데이터째 지우므로 다른 활성 멤버가
+      있으면 409(CREATOR_FORCE_DELETION_DETAIL)다. 소프트 탈퇴는 샵을 지우지 않는다.
     다른 멤버가 없는 샵은 막지 않는다 — 샵 삭제 API 가 없어 혼자인 원장도 탈퇴할 수
-    있어야 한다(연결 해제 · 강등 가드보다 느슨하다).
+    있어야 한다(연결 해제 · 강등 가드보다 느슨하다). 강제 탈퇴면 그 샵도 함께 지워진다.
 
-    :raises CustomException: 409(직원이 있는 샵의 마지막 대표원장)
+    :raises CustomException: 409(직원이 있는 샵의 마지막 대표원장 · 다른 멤버가 있는
+        만든 샵의 강제 탈퇴)
     """
-    for shop_id in get_primary_owner_shop_ids(db, user_id):
+    owner_shop_ids = set(get_primary_owner_shop_ids(db, user_id))
+    created_shop_ids = (
+        set() if is_soft_delete else set(get_created_shop_ids(db, user_id))
+    )
+    for shop_id in sorted(owner_shop_ids | created_shop_ids):
         lock_primary_owners(db, shop_id)
-        if count_other_primary_owners(db, shop_id, user_id) > 0:
-            continue
+        if (
+            shop_id in owner_shop_ids
+            and count_other_primary_owners(db, shop_id, user_id) == 0
+        ):
+            detail = LAST_OWNER_DELETION_DETAIL
+        elif shop_id in created_shop_ids:
+            detail = CREATOR_FORCE_DELETION_DETAIL
+        else:
+            continue  # 다른 활성 대표원장이 남고, 강제 탈퇴가 지우지도 않는 샵
         if count_other_active_members(db, shop_id, user_id) > 0:
             raise CustomException(
                 status_code=status.HTTP_409_CONFLICT,
                 domain=DOMAIN,
-                detail=LAST_OWNER_DELETION_DETAIL,
+                detail=detail,
             )
 
 
@@ -282,8 +312,10 @@ def delete_user_service(
 ) -> None:
     """현재 로그인한 사용자를 삭제합니다.
 
-    직원이 있는 샵의 마지막 활성 대표원장이면 두 모드(소프트 · 강제) 모두 409 다
-    (_ensure_staffed_shops_keep_owner, 삭제 전 같은 트랜잭션에서 잠근 뒤 센다).
+    직원이 있는 샵의 마지막 활성 대표원장이면 두 모드(소프트 · 강제) 모두 409 다.
+    강제 삭제는 내가 만든 샵(Shop.user_id)도 데이터째 지우므로(User.shops cascade), 그중
+    다른 활성 멤버가 있는 샵이 하나라도 있으면 409 다. 둘 다 삭제 전 같은 트랜잭션에서
+    잠근 뒤 센다(_ensure_staffed_shops_keep_owner).
 
     세션 무효화(유저 캐시 · 리프레시 토큰 삭제)는 커밋이 성공한 뒤에만 한다.
     - 커밋 전에 지우면, 커밋 실패 시 유저는 남았는데 세션만 사라진다.
@@ -293,7 +325,8 @@ def delete_user_service(
     소프트삭제는 디바이스 푸시 토큰을 같은 트랜잭션에서(커밋 전) 비활성화한다.
     강제 삭제는 device_push_tokens.user_id FK(ON DELETE CASCADE)로 토큰도 지워진다.
 
-    :raises CustomException: 404(유저 없음), 409(직원이 있는 샵의 마지막 대표원장), 500
+    :raises CustomException: 404(유저 없음), 409(직원이 있는 샵의 마지막 대표원장 ·
+        다른 멤버가 있는 만든 샵의 강제 삭제), 500
     """
     user = get_user_by_id(db, current_user.id)
     if not user:
@@ -307,7 +340,7 @@ def delete_user_service(
     user_id = user.id
 
     try:
-        _ensure_staffed_shops_keep_owner(db, user_id)
+        _ensure_staffed_shops_keep_owner(db, user_id, is_soft_delete=is_soft_delete)
         delete_user_db(
             db=db,
             user=user,
@@ -318,7 +351,8 @@ def delete_user_service(
             deactivate_device_tokens_by_user(db, user_id)
         db.commit()
     except CustomException:
-        # 409(마지막 대표원장): 롤백으로 잠금을 바로 풀고 그대로 올린다.
+        # 409(마지막 대표원장 · 만든 샵의 강제 삭제): 롤백으로 잠금을 바로 풀고 그대로
+        # 올린다.
         db.rollback()
         raise
     except SQLAlchemyError as e:

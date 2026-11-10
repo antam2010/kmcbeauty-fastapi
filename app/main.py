@@ -125,7 +125,8 @@ app.add_exception_handler(DataError, data_error_handler)
 
 # Redis 장애 · 타임아웃(처리되지 않은 RedisError)은 500 이 아니라 503 이다. 리프레시
 # 토큰 · 선택 샵 · rate limit 저장소(slowapi)가 Redis 에 있다. 유저 캐시 조회 · 저장
-# 오류는 처리기까지 오지 않고 DB 로 넘어간다(app/utils/redis/user.py).
+# 오류는 처리기까지 오지 않고 DB 로 넘어간다(조회 오류는 app/dependencies/auth.py 가
+# 잡고, 저장 오류는 app/utils/redis/user.py 가 삼킨다).
 app.add_exception_handler(RedisError, redis_error_handler)
 
 

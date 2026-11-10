@@ -103,11 +103,17 @@ def delete_user_handler(
 @router.delete(
     "/me/force",
     summary="사용자 강제 삭제",
-    description="현재 로그인한 사용자를 강제로 삭제합니다.",
+    description=(
+        "현재 로그인한 사용자를 강제로 삭제합니다. "
+        "내가 만든 샵과 그 데이터(예약 · 고객 · 메뉴 등)도 함께 지워집니다. "
+        "내가 만든 샵에 다른 활성 멤버가 있으면 409(USER_CONFLICT)이며, "
+        "이때는 일반 탈퇴(DELETE /users/me)를 이용합니다."
+    ),
     status_code=status.HTTP_204_NO_CONTENT,
     responses={
         status.HTTP_404_NOT_FOUND: COMMON_ERROR_RESPONSES[status.HTTP_404_NOT_FOUND],
-        # 직원이 있는 샵의 마지막 대표원장이면 409(USER_CONFLICT).
+        # 직원이 있는 샵의 마지막 대표원장이거나, 내가 만든 샵(강제 삭제가 함께
+        # 지운다)에 다른 활성 멤버가 있으면 409(USER_CONFLICT).
         status.HTTP_409_CONFLICT: COMMON_ERROR_RESPONSES[status.HTTP_409_CONFLICT],
     },
 )

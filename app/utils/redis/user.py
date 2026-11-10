@@ -18,10 +18,11 @@ def _get_user_key(user_id: int) -> str:
 
 
 def get_user_redis(user_id: int) -> dict[str, Any] | None:
-    """Redis에서 사용자 정보를 조회.
+    """Redis에서 사용자 정보를 조회. 값이 없으면 None(캐시 미스)이다.
 
-    Redis 오류(장애 · 타임아웃)는 캐시 미스(None)로 본다. 호출자(get_current_user)가 DB
-    에서 읽으므로 Redis 가 죽어도 인증은 된다. 로그에는 user_id 만 남긴다(PII 없음).
+    Redis 오류(장애 · 타임아웃)는 경고 로그(user_id 만, PII 없음)를 남긴 뒤 다시 던진다.
+    호출자(get_current_user)는 이 오류를 미스로 보고 DB 로 인증하되, 그 요청의 캐시
+    저장은 건너뛴다(응답 없는 Redis 에 쓰기까지 하면 2초를 더 기다린다).
     """
     key = _get_user_key(user_id)
     try:
@@ -32,7 +33,7 @@ def get_user_redis(user_id: int) -> dict[str, Any] | None:
             user_id,
             exc_info=True,
         )
-        return None
+        raise
     if data:
         return json.loads(data)
     return None

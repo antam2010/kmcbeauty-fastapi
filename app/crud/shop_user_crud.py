@@ -268,7 +268,8 @@ def get_primary_owner_shop_ids(db: Session, user_id: int) -> list[int]:
 def count_other_active_members(db: Session, shop_id: int, user_id: int) -> int:
     """user_id 를 뺀 샵의 활성 멤버 수(대표원장 여부 무관, 탈퇴 유저 제외).
 
-    탈퇴 가드가 다른 대표원장이 없는 샵에서만 센다(lock_primary_owners 로 잠근 뒤).
+    탈퇴 가드가 lock_primary_owners 로 잠근 뒤에 센다. 마지막 대표원장 규칙(다른
+    대표원장이 없는 샵)과 생성자 규칙(강제 탈퇴가 지울, 내가 만든 샵)에 쓴다.
 
     Args:
         db (Session): Database session.

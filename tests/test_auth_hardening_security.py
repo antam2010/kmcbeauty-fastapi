@@ -227,6 +227,7 @@ def delete_events(monkeypatch: pytest.MonkeyPatch) -> list:
         "get_primary_owner_shop_ids",
         lambda _db, _uid: [],
     )
+    monkeypatch.setattr(user_service, "get_created_shop_ids", lambda _db, _uid: [])
     monkeypatch.setattr(user_service, "delete_user_db", fake_delete_user_db)
     monkeypatch.setattr(
         user_service,

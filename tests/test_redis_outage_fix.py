@@ -142,7 +142,7 @@ def client(main_app: FastAPI) -> TestClient:
 @pytest.mark.parametrize(
     ("cache", "failed_commands"),
     [
-        pytest.param(DownRedis, 2, id="read-and-write-fail"),
+        pytest.param(DownRedis, 1, id="read-fails-write-skipped"),
         pytest.param(FullRedis, 1, id="write-through-fails"),
     ],
 )
