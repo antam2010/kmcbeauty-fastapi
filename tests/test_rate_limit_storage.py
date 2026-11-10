@@ -51,3 +51,24 @@ def test_configured_storage_uri_is_used(monkeypatch: pytest.MonkeyPatch) -> None
         6,
     )
     assert conn_kwargs["password"] == "test-pw"  # noqa: S105  # 테스트 픽스처 값
+
+
+def test_redis_storage_gives_up_within_two_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redis 저장소도 연결 · 응답을 2초까지만 기다린다(유저 캐시 클라이언트와 같다).
+
+    없으면 응답 없는 Redis 에 한도 검사(hit)가 끝없이 막힌다. 한도가 걸린 엔드포인트는
+    모두 sync 라 막힌 검사가 스레드풀 스레드를 붙잡는다. 넘으면 RedisError 로 503 이다.
+    """
+    monkeypatch.setenv("RATE_LIMIT_STORAGE_URI", "redis://:test-pw@redis:6379/6")
+    # test_configured_storage_uri_is_used 와 같이 settings 를 주입하고 모듈을 재실행한다
+    # (종료 시 monkeypatch 가 settings · limiter 를 원복한다).
+    monkeypatch.setattr(config, "settings", config.Settings(_env_file=None))
+    monkeypatch.setattr(rate_limit, "limiter", rate_limit.limiter)
+    reloaded = importlib.reload(rate_limit)
+
+    storage = reloaded.limiter.limiter.storage
+    conn_kwargs = storage.get_connection().connection_pool.connection_kwargs
+    assert conn_kwargs.get("socket_connect_timeout") == 2
+    assert conn_kwargs.get("socket_timeout") == 2
