@@ -1,6 +1,6 @@
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlalchemy import paginate
-from sqlalchemy import ColumnElement, and_
+from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.orm import Session
 
 from app.models.shop import Shop
@@ -76,6 +76,30 @@ def get_user_shops(db: Session, user_id: int) -> Page[Shop]:
         .order_by(Shop.id.desc())
     )
     return paginate(query)
+
+
+def get_created_shop_ids(db: Session, user_id: int) -> list[int]:
+    """user_id 가 만든(Shop.user_id) 샵 ID 목록(id 순).
+
+    소프트삭제된 샵도 넣는다(deleted_at 을 거르지 않는다). 유저를 강제 삭제하면 ORM
+    cascade(User.shops)가 만든 샵을 삭제 여부와 상관없이 모두 지우므로, 탈퇴 가드가
+    이 목록으로 강제 탈퇴가 지울 샵을 확인한다.
+
+    Args:
+        db (Session): Database session.
+        user_id (int): 유저 ID.
+
+    Returns:
+        list[int]: 만든 샵 ID.
+
+    """
+    return list(
+        db.execute(
+            select(Shop.id).where(Shop.user_id == user_id).order_by(Shop.id),
+        )
+        .scalars()
+        .all(),
+    )
 
 
 # 샵 생성

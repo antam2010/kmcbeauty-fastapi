@@ -66,6 +66,7 @@ def _user(user_id: int) -> User:
 
 def _world(*memberships: Membership) -> FakeSQLSession:
     """OWNER 와 멤버십에 나오는 유저들(LEFT 는 탈퇴 상태)."""
+    # Shop 행 없음 — 생성자 가드는 test_force_delete_creator_guard_security.py 참고.
     user_ids = {OWNER_ID} | {user_id for _, user_id, _ in memberships}
     return FakeSQLSession(
         *(_user(user_id) for user_id in sorted(user_ids)),
