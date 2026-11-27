@@ -31,6 +31,9 @@
 #       IMAGE_TAG=<직전 이미지> docker compose -p kmcbeauty -f compose.prod.yaml up -d --wait
 #       — 스키마는 되돌리지 않는다. 그래서 마이그레이션은 expand/contract(하위 호환)만 허용한다.
 #
+# k3s 대상: .env.prod 에 DEPLOY_TARGET=k3s 가 있으면 인자 검사 · 잠금 뒤 scripts/deploy_k3s.sh 로 exec 한다
+#   (docs/deployment.md 6.1절). 아래 단계 설명은 compose 대상의 것이다.
+#
 # 공개 저장소라 Actions 로그도 공개된다: IP · 서브넷 · 앱 로그(클라이언트 IP)는 출력하지 않는다.
 # ==============================================================================
 set -euo pipefail
@@ -112,6 +115,14 @@ if [ "${KMC_DEPLOY_LOCK_FD:-}" != 9 ]; then
   exec 9>>"$LOCK_FILE"
 fi
 flock -n 9 || die "다른 배포가 진행 중이다(잠금: $LOCK_FILE)" 2
+
+# 배포 대상: 서버의 .env.prod 에 DEPLOY_TARGET=k3s 가 있으면 k3s 로 넘긴다(scripts/deploy_k3s.sh,
+# 잠금 fd 9 를 그대로 넘긴다). 없거나 다른 값이면 아래 compose 흐름이다. 값은 글자 그대로 비교한다.
+if [ -f "$ENV_FILE" ] && grep -qxE 'DEPLOY_TARGET=k3s' "$ENV_FILE"; then
+  say "배포 대상: k3s"
+  export KMC_DEPLOY_LOCK_FD=9
+  exec bash scripts/deploy_k3s.sh "$SHA"
+fi
 
 # ── [1] 전제 검사(서버 상태를 바꾸기 전에 전부) ──────────────────────────
 say "전제 검사 — $IMAGE"
