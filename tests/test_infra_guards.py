@@ -645,7 +645,7 @@ def test_deploy_entry_refuses_commit_not_on_main(
 
 
 def test_deploy_dispatches_to_k3s_only_on_exact_target_line() -> None:
-    """deploy.sh 는 잠금 뒤 `DEPLOY_TARGET=k3s` 줄이 정확히 있을 때만 deploy_k3s.sh 로 넘긴다."""
+    """deploy.sh 는 잠금 뒤 DEPLOY_TARGET=k3s 줄이 있을 때만 deploy_k3s.sh 로 넘긴다."""
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     dispatch = text.index("exec bash scripts/deploy_k3s.sh")
     assert text.index("flock -n 9 || die") < dispatch, (
@@ -661,7 +661,7 @@ def test_deploy_dispatches_to_k3s_only_on_exact_target_line() -> None:
 
 
 def test_deploy_k3s_backs_up_and_migrates_before_replacing() -> None:
-    """deploy_k3s.sh: 백업 → 마이그레이션 Job → set image 순서이고 세 Deployment 를 모두 바꾼다."""
+    """deploy_k3s.sh: 백업 → 마이그레이션 Job → set image 순서, Deployment 3개 교체."""
     text = DEPLOY_K3S.read_text(encoding="utf-8")
     # 머리말 주석이 아니라 실제 명령 줄로 순서를 본다.
     backup = text.index('docker exec "$PG_CONTAINER" pg_dump')
@@ -674,7 +674,7 @@ def test_deploy_k3s_backs_up_and_migrates_before_replacing() -> None:
         "kmcbeauty-celery-beat:beat",
     ):
         assert deployment in text, f"{deployment} 교체가 없습니다."
-    # 마이그레이션 Job 은 앱과 같은 설정 · 시크릿 경로를 받는다(서버의 Secret 이름과 같아야 한다).
+    # 마이그레이션 Job 은 앱과 같은 설정 · 시크릿을 받는다(서버의 Secret 이름과 같다).
     assert "configMapRef: { name: kmcbeauty-env }" in text
     assert "secretName: kmcbeauty-secrets" in text
     assert "mountPath: /run/secrets" in text
