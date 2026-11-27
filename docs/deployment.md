@@ -251,6 +251,32 @@ docker compose -p kmcbeauty -f compose.prod.yaml run --rm --no-deps -T kmcbeauty
 | 5 | 기동 실패(`up --wait` · 상태 확인) | **새 컨테이너가 비정상이거나 내려가 있을 수 있다 — 자동 롤백 없음.** 출력된 롤백 명령 실행 |
 | 6 | 스모크 실패 | 새 버전이 떠 있음 — 원인 확인 후 롤백 판단 |
 
+### 6.1 k3s 대상 (`scripts/deploy_k3s.sh`)
+
+운영 앱은 k3s 클러스터의 namespace `kmcbeauty` 에서 돈다(2026-11-27 이전). 서버의 `.env.prod` 에
+`DEPLOY_TARGET=k3s` 줄이 있으면 `deploy.sh` 가 인자 검사 · 잠금 뒤 `deploy_k3s.sh` 로 exec 한다(잠금 fd 를
+넘긴다). CD 워크플로 · 강제 명령 · 종료 코드는 그대로다.
+
+- 매니페스트(Deployment 3개 · Service · Ingress · ConfigMap `kmcbeauty-env`)와 Secret `kmcbeauty-secrets` 는
+  인프라 저장소(server-mini2 `k8s/apps/kmcbeauty`)가 관리한다. 이 스크립트는 이미지 태그만 바꾼다.
+- Secret 키는 compose 시크릿 target 과 같다(`/run/secrets/<필드명>` 마운트). 접속 주소만 컨테이너 이름 대신
+  클러스터에서 닿는 서버 주소다.
+- 계정: `KUBECONFIG`(기본 `~/.kube/kmcbeauty-deployer.yaml`) — namespace `kmcbeauty` 의 Deployment patch ·
+  Job create 만 허용된 ServiceAccount.
+
+| 단계 | 내용 · 실패 조건 |
+|---|---|
+| 전제 | `kubectl` · kubeconfig 없음, Deployment 3개 중 볼 수 없는 것, Job 생성 권한 없음, `postgresql` 컨테이너 없음, HEAD ≠ sha · 추적 파일 수정 |
+| 이미지 | `docker manifest inspect` 로 레지스트리에 있는지만 본다(pull 은 kubelet). 없으면 3 |
+| 백업 | compose 대상과 같다(`pg_dump -Fc` + `pg_restore -l`) |
+| 마이그레이션 | 새 이미지의 일회성 Job(`backoffLimit: 0`, 300초) — `alembic upgrade head` 후 `current` 가 `(head)` 가 아니면 4. Job 로그에는 리비전 줄만 남긴다 |
+| 교체 | `kubectl set image` → `rollout status --timeout=180s` (api → worker → beat). 실패하면 5 — api 는 옛 Pod 가 남는다 |
+| 스모크 | 외부 `SMOKE_URL` 6회까지 재시도. 실패하면 6 |
+| 정리 · 요약 | compose 대상과 같다. 롤백 안내는 `kubectl -n kmcbeauty rollout undo deployment/<이름>` |
+
+compose 로 되돌리려면 `.env.prod` 의 `DEPLOY_TARGET=k3s` 줄을 지우고, server-mini2 nginx 의 `$kmc_api` 를
+`http://kmcbeauty-api:8000` 으로 바꾼 뒤 `scripts/deploy.sh <sha>` 를 실행한다.
+
 ### 필요한 GitHub 저장소 시크릿 (REQ-INFRA-110)
 
 | 시크릿 | 용도 | 소유자 | 회전 |

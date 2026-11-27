@@ -37,6 +37,7 @@ CD_FILE = REPO_ROOT / ".github" / "workflows" / "cd.yml"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 DEPLOY_SCRIPT = SCRIPTS_DIR / "deploy.sh"
 DEPLOY_ENTRY = SCRIPTS_DIR / "deploy_entry.sh"
+DEPLOY_K3S = SCRIPTS_DIR / "deploy_k3s.sh"
 ENV_PROD_EXAMPLE = REPO_ROOT / ".env.prod.example"
 NGINX_CONF = REPO_ROOT / "deploy" / "nginx" / "api-beauty.conf"
 GITIGNORE = REPO_ROOT / ".gitignore"
@@ -54,6 +55,7 @@ REMOVED_SWARM_FILES = (
 # 공개 저장소에 올라가는 배포 문서·설정(사설 IPv4 금지 대상).
 PUBLIC_DEPLOY_ARTIFACTS = [
     COMPOSE_FILE,
+    DEPLOY_K3S,
     ENV_PROD_EXAMPLE,
     NGINX_CONF,
     REPO_ROOT / "docs" / "deployment.md",
@@ -637,3 +639,42 @@ def test_deploy_entry_refuses_commit_not_on_main(
     calls = _calls(entry_sandbox)
     assert not [call for call in calls if call.startswith("git checkout")]
     assert not [call for call in calls if call.startswith("deploy.sh")]
+
+
+# --- scripts/deploy_k3s.sh ---------------------------------------------------
+
+
+def test_deploy_dispatches_to_k3s_only_on_exact_target_line() -> None:
+    """deploy.sh 는 잠금 뒤 `DEPLOY_TARGET=k3s` 줄이 정확히 있을 때만 deploy_k3s.sh 로 넘긴다."""
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    dispatch = text.index("exec bash scripts/deploy_k3s.sh")
+    assert text.index("flock -n 9 || die") < dispatch, (
+        "잠금보다 먼저 k3s 로 넘기면 안 됩니다."
+    )
+    assert text.index("# ── [1] 전제 검사") > dispatch, (
+        "compose 전제 검사 전에 넘겨야 합니다."
+    )
+    assert "grep -qxE 'DEPLOY_TARGET=k3s'" in text, (
+        "대상 줄은 전체 일치로 비교해야 합니다."
+    )
+    assert "export KMC_DEPLOY_LOCK_FD=9" in text[:dispatch], "잠금 fd 를 넘겨야 합니다."
+
+
+def test_deploy_k3s_backs_up_and_migrates_before_replacing() -> None:
+    """deploy_k3s.sh: 백업 → 마이그레이션 Job → set image 순서이고 세 Deployment 를 모두 바꾼다."""
+    text = DEPLOY_K3S.read_text(encoding="utf-8")
+    # 머리말 주석이 아니라 실제 명령 줄로 순서를 본다.
+    backup = text.index('docker exec "$PG_CONTAINER" pg_dump')
+    migrate = text.index("kube create -f -")
+    replace = text.index('kube set image "deployment/$name"')
+    assert backup < migrate < replace
+    for deployment in (
+        "kmcbeauty-api:api",
+        "kmcbeauty-celery-worker:worker",
+        "kmcbeauty-celery-beat:beat",
+    ):
+        assert deployment in text, f"{deployment} 교체가 없습니다."
+    # 마이그레이션 Job 은 앱과 같은 설정 · 시크릿 경로를 받는다(서버의 Secret 이름과 같아야 한다).
+    assert "configMapRef: { name: kmcbeauty-env }" in text
+    assert "secretName: kmcbeauty-secrets" in text
+    assert "mountPath: /run/secrets" in text
